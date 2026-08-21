@@ -51,6 +51,8 @@ const loadProjectWorkspace = () =>
     Component: m.ProjectWorkspace,
   }));
 
+const loadKnowledgeRoute = () => import('./KnowledgeRoute').then((module) => ({ Component: module.default }));
+
 const baseEl = document.querySelector('base');
 const baseHref = baseEl?.getAttribute('href') || '/';
 
@@ -133,6 +135,10 @@ export const router = createBrowserRouter(
             {
               path: 'search',
               element: <Search />,
+            },
+            {
+              path: 'knowledge',
+              lazy: loadKnowledgeRoute,
             },
             {
               path: 'prompts',

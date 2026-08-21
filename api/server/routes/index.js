@@ -1,4 +1,5 @@
 const accessPermissions = require('./accessPermissions');
+const companyKnowledge = require('./companyKnowledge');
 const assistants = require('./assistants');
 const categories = require('./categories');
 const adminAuth = require('./admin/auth');
@@ -38,6 +39,7 @@ const mcp = require('./mcp');
 const rum = require('./rum');
 
 module.exports = {
+  companyKnowledge,
   rum,
   mcp,
   auth,

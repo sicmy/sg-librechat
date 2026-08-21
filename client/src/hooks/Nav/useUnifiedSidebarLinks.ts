@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { useRecoilValue } from 'recoil';
-import { MessagesSquare } from 'lucide-react';
+import { BookOpenText, MessagesSquare } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { useUserKeyQuery } from 'librechat-data-provider/react-query';
 import { getConfigDefaults, getEndpointField } from 'librechat-data-provider';
 import type { TEndpointsConfig } from 'librechat-data-provider';
@@ -13,6 +14,7 @@ import store from '~/store';
 const defaultInterface = getConfigDefaults().interface;
 
 export default function useUnifiedSidebarLinks() {
+  const navigate = useNavigate();
   const conversation = useRecoilValue(store.conversationByIndex(0));
   const endpoint = conversation?.endpoint;
   const { data: startupConfig } = useGetStartupConfig();
@@ -58,8 +60,16 @@ export default function useUnifiedSidebarLinks() {
       Component: ConversationsSection,
     };
 
-    return [conversationLink, ...sideNavLinks];
-  }, [sideNavLinks]);
+    const knowledgeLink: NavLink = {
+      title: 'com_ui_company_knowledge',
+      label: '',
+      icon: BookOpenText,
+      id: 'company-knowledge',
+      onClick: () => navigate('/knowledge'),
+    };
+
+    return [conversationLink, knowledgeLink, ...sideNavLinks];
+  }, [navigate, sideNavLinks]);
 
   return links;
 }

@@ -907,6 +907,8 @@
   "com_ui_change_version": "Change Version",
   "com_ui_chat": "Chat",
   "com_ui_chat_history": "Chat History",
+  "com_ui_company_knowledge": "Company Knowledge",
+  "com_ui_company_knowledge_unavailable": "Company Knowledge is not available in this deployment profile.",
   "com_ui_chats": "Chats",
   "com_ui_check_internet": "Check your internet connection",
   "com_ui_clear": "Clear",
