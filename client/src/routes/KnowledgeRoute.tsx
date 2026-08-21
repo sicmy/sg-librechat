@@ -2,11 +2,16 @@ import { useEffect, useState } from 'react';
 import { useLocalize } from '~/hooks';
 
 let assetPromise: Promise<void> | undefined;
+const companyKnowledgeAssetVersion = '0.1.1';
 
 function loadAssets(): Promise<void> {
   if (assetPromise) return assetPromise;
-  const script = new URL('company-knowledge/company-knowledge.js', document.baseURI).href;
-  const stylesheet = new URL('company-knowledge/style.css', document.baseURI).href;
+  const scriptUrl = new URL('company-knowledge/company-knowledge.js', document.baseURI);
+  const stylesheetUrl = new URL('company-knowledge/style.css', document.baseURI);
+  scriptUrl.searchParams.set('v', companyKnowledgeAssetVersion);
+  stylesheetUrl.searchParams.set('v', companyKnowledgeAssetVersion);
+  const script = scriptUrl.href;
+  const stylesheet = stylesheetUrl.href;
   if (!document.querySelector(`link[href="${stylesheet}"]`)) {
     const link = document.createElement('link'); link.rel = 'stylesheet'; link.href = stylesheet; document.head.append(link);
   }
