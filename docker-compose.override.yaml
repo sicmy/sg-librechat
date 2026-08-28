@@ -1,0 +1,9 @@
+services:
+  api:
+    environment:
+      SG_GATEWAY_API_KEY: ${SG_GATEWAY_API_KEY}
+    volumes:
+      - type: bind
+        source: ./librechat.yaml
+        target: /app/librechat.yaml
+        read_only: true
