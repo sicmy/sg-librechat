@@ -1,7 +1,12 @@
 import { expect, request as playwrightRequest, test } from '@playwright/test';
 import type { APIRequestContext, Browser, Page } from '@playwright/test';
 import { getSecondaryE2EUser } from '../../setup/users.mock';
-import { messagesView, sendMessage, sendMessageAndWaitForCompletion } from '../mock/helpers';
+import {
+  isAgentsStream,
+  messagesView,
+  sendMessage,
+  sendMessageAndWaitForCompletion,
+} from '../mock/helpers';
 
 type CapturedRequest = {
   model: string;
@@ -97,6 +102,7 @@ test('routes every response depth through Gateway while preserving the conversat
     .getByRole('button', { name: 'Attach File Options' })
     .locator('..');
   await expect(depth).toHaveCount(1);
+  await expect(depth).toHaveText('');
   await expect(
     attachmentControls.getByRole('combobox', { name: 'Response depth: Balanced' }),
   ).toHaveCount(1);
@@ -120,13 +126,17 @@ test('routes every response depth through Gateway while preserving the conversat
   await page.reload();
   await expect(page.getByRole('combobox', { name: 'Response depth: Quick' })).toBeVisible();
 
+  const deterministicAnswers = messagesView(page).getByText(DETERMINISTIC_ANSWER);
+  await expect(deterministicAnswers).toHaveCount(2);
   await sendMessage(page, 'Keep the next selection while this response streams.');
   await expect.poll(async () => (await readStubRequests(request)).length).toBe(3);
   await chooseDepth(page, 'Quick', 'Deep');
-  await expect(messagesView(page).getByText(DETERMINISTIC_ANSWER).last()).toBeVisible();
+  await expect(deterministicAnswers).toHaveCount(3);
   await expect(page.getByRole('combobox', { name: 'Response depth: Deep' })).toBeVisible();
 
   await sendMessageAndWaitForCompletion(page, 'Verify the deep path.');
+  await expect(deterministicAnswers).toHaveCount(4);
+  await expect(page.getByRole('combobox', { name: 'Response depth: Deep' })).toBeVisible();
   await expect
     .poll(() => readStubRequests(request))
     .toEqual([
@@ -135,6 +145,31 @@ test('routes every response depth through Gateway while preserving the conversat
       expectedRequest(4_096),
       expectedRequest(65_536),
     ]);
+
+  const deepAssistant = messagesView(page)
+    .locator('.message-render')
+    .filter({ hasText: DETERMINISTIC_ANSWER })
+    .last();
+  await deepAssistant.hover();
+  const regenerate = deepAssistant.getByRole('button', { name: 'Regenerate', exact: true }).last();
+  await expect(regenerate).toBeVisible();
+  await chooseDepth(page, 'Deep', 'Quick');
+  const [regenerateResponse] = await Promise.all([
+    page.waitForResponse(isAgentsStream, { timeout: 30_000 }),
+    regenerate.click(),
+  ]);
+  expect(regenerateResponse.ok()).toBeTruthy();
+  await expect
+    .poll(() => readStubRequests(request))
+    .toEqual([
+      expectedRequest(16_384),
+      expectedRequest(4_096),
+      expectedRequest(4_096),
+      expectedRequest(65_536),
+      expectedRequest(65_536),
+    ]);
+  await expect(page.getByText('2 / 2')).toBeVisible();
+  await expect(page.getByRole('combobox', { name: 'Response depth: Quick' })).toBeVisible();
 });
 
 test('hides submitted-turn depth badges from a regular user', async ({
@@ -149,9 +184,17 @@ test('hides submitted-turn depth badges from a regular user', async ({
 
   const page = await registerRegularUser(browser, baseURL);
   try {
-    await sendMessageAndWaitForCompletion(page, 'Verify the regular user view.');
+    const regularPrompt = 'Verify the regular user view.';
+    await sendMessageAndWaitForCompletion(page, regularPrompt);
     await expect(messagesView(page).getByText(DETERMINISTIC_ANSWER)).toBeVisible();
-    await expect(messagesView(page).locator('[data-effort]')).toHaveCount(0);
+    const submittedMessage = messagesView(page)
+      .locator('.message-render')
+      .filter({ hasText: regularPrompt });
+    await expect(
+      submittedMessage.getByText('Response depth: Balanced', { exact: true }),
+    ).toHaveCount(0);
+    await expect(submittedMessage.getByLabel('Response depth: Balanced')).toHaveCount(0);
+    await expect(submittedMessage.locator('[data-effort]')).toHaveCount(0);
     await expect.poll(() => readStubRequests(request)).toEqual([expectedRequest(16_384)]);
   } finally {
     await page.context().close();
