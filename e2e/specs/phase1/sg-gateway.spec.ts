@@ -139,6 +139,17 @@ test('routes every response depth through Gateway while preserving the conversat
     attachmentControls.getByRole('combobox', { name: 'Response depth: Balanced' }),
   ).toHaveCount(1);
 
+  await depth.click();
+  const depthOptions = page.getByRole('option').filter({ hasText: /^(Quick|Balanced|Deep)$/ });
+  await expect(depthOptions).toHaveCount(3);
+  const messageInput = page.getByRole('textbox', { name: 'Message input' });
+  const inputBox = await messageInput.boundingBox();
+  if (!inputBox) {
+    throw new Error('Message input must have a visible bounding box');
+  }
+  await page.mouse.click(inputBox.x + inputBox.width / 2, inputBox.y + inputBox.height / 2);
+  await expect(depthOptions).toHaveCount(0);
+
   await chooseDepth(page, 'Balanced', 'Balanced');
   await sendMessageAndWaitForCompletion(page, 'Verify the balanced path.');
   await expect(messagesView(page).getByText(DETERMINISTIC_ANSWER).last()).toBeVisible();

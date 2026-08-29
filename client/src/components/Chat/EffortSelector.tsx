@@ -61,6 +61,7 @@ export function EffortControl({
       />
       <Ariakit.SelectPopover
         store={select}
+        modal
         portal
         unmountOnHide
         gutter={8}
