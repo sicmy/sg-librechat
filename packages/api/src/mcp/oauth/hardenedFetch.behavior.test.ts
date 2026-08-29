@@ -22,7 +22,7 @@ async function createLocalServer(): Promise<TestServer> {
     socket.once('close', () => sockets.delete(socket));
   });
 
-  await new Promise<void>((resolve) => server.listen(0, 'localhost', resolve));
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address() as AddressInfo;
 
   return {
