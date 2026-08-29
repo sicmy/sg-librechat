@@ -2,6 +2,55 @@ import { defineConfig, devices } from '@playwright/test';
 import path from 'path';
 import { getE2EBaseURL, getLocalE2EEnv } from './setup/env';
 
+const ambientRuntimeAllowlist = new Set([
+  'ALLUSERSPROFILE',
+  'APPDATA',
+  'COMSPEC',
+  'COMMONPROGRAMFILES',
+  'COMMONPROGRAMFILES(X86)',
+  'COMMONPROGRAMW6432',
+  'HOME',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'LOCALAPPDATA',
+  'MONGOMS_DOWNLOAD_DIR',
+  'MONGOMS_SYSTEM_BINARY',
+  'MONGOMS_VERSION',
+  'OS',
+  'PATH',
+  'PATHEXT',
+  'PLAYWRIGHT_BROWSERS_PATH',
+  'PROGRAMDATA',
+  'PROGRAMFILES',
+  'PROGRAMFILES(X86)',
+  'PROGRAMW6432',
+  'PYTHONUTF8',
+  'SHELL',
+  'SYSTEMDRIVE',
+  'SYSTEMROOT',
+  'TEMP',
+  'TMP',
+  'TMPDIR',
+  'USER',
+  'USERNAME',
+  'USERPROFILE',
+  'UV_CACHE_DIR',
+  'UV_LINK_MODE',
+  'UV_PYTHON',
+  'WINDIR',
+]);
+const loopbackNoProxy = '127.0.0.1,localhost,::1';
+const hermeticProxyEnv = {
+  ALL_PROXY: '',
+  HTTP_PROXY: '',
+  HTTPS_PROXY: '',
+  NO_PROXY: loopbackNoProxy,
+  all_proxy: '',
+  http_proxy: '',
+  https_proxy: '',
+  no_proxy: loopbackNoProxy,
+};
+
 const rootPath = path.resolve(__dirname, '..');
 const serverPath = path.resolve(rootPath, 'e2e/setup/start-server.js');
 const noDotenvPath = path.resolve(rootPath, 'e2e/specs/.test-results/no-dotenv');
@@ -9,11 +58,19 @@ const gatewayRoot = process.env.SG_GATEWAY_E2E_ROOT;
 if (!gatewayRoot) {
   throw new Error('SG_GATEWAY_E2E_ROOT must point to the sg-librechat Task 1E worktree');
 }
+
+for (const key of Object.keys(process.env)) {
+  if (!ambientRuntimeAllowlist.has(key.toUpperCase())) {
+    delete process.env[key];
+  }
+}
+
 const gatewayServiceRoot = path.resolve(gatewayRoot, 'services/sg-ai-gateway');
 const stubPath = path.resolve(gatewayServiceRoot, 'tests/e2e/stub_provider.py');
 const gatewayConfigPath = path.resolve(gatewayServiceRoot, 'tests/e2e/gateway.yaml');
 
 Object.assign(process.env, {
+  ...hermeticProxyEnv,
   DOTENV_CONFIG_PATH: noDotenvPath,
   E2E_BASE_URL: 'http://127.0.0.1:3334',
   E2E_HOST: '127.0.0.1',
@@ -24,11 +81,13 @@ Object.assign(process.env, {
   ENDPOINTS: 'custom',
   MONGO_URI: 'mongodb://127.0.0.1:27017/LibreChat-phase1-e2e',
   OPENAI_API_KEY: '',
+  SG_GATEWAY_E2E_ROOT: gatewayRoot,
 });
 
 const baseURL = getE2EBaseURL();
 const baseEnv = {
   ...getLocalE2EEnv(),
+  ...hermeticProxyEnv,
   ALLOW_SOCIAL_LOGIN: 'false',
   ALLOW_SOCIAL_REGISTRATION: 'false',
   CONFIG_PATH: path.resolve(rootPath, 'e2e/config/librechat.phase1.yaml'),

@@ -20,11 +20,13 @@ type StubState = {
 };
 
 const STUB_URL = 'http://127.0.0.1:4010';
+const GATEWAY_URL = 'http://127.0.0.1:4000';
 const DETERMINISTIC_ANSWER = 'Phase 1 deterministic answer.';
+const LOOPBACK_NO_PROXY = '127.0.0.1,localhost,::1';
 
-const expectedRequest = (thinking_budget: number): CapturedRequest => ({
+const expectedRequest = (thinking_budget: number, stream = true): CapturedRequest => ({
   model: 'qwen3.7-plus',
-  stream: true,
+  stream,
   enable_thinking: true,
   thinking_budget,
 });
@@ -84,6 +86,36 @@ test.describe.configure({ mode: 'serial' });
 
 test.beforeEach(async ({ request }) => {
   await resetStub(request);
+});
+
+test('keeps parent secrets out of child processes and routes Gateway loopback directly', async ({
+  request,
+}) => {
+  expect(process.env.PHASE1_SENTINEL_SECRET).toBeUndefined();
+  expect(process.env.HTTP_PROXY).toBe('');
+  expect(process.env.HTTPS_PROXY).toBe('');
+  expect(process.env.ALL_PROXY).toBe('');
+  expect(process.env.http_proxy).toBe('');
+  expect(process.env.https_proxy).toBe('');
+  expect(process.env.all_proxy).toBe('');
+  expect(process.env.NO_PROXY).toBe(LOOPBACK_NO_PROXY);
+  expect(process.env.no_proxy).toBe(LOOPBACK_NO_PROXY);
+
+  const response = await request.post(`${GATEWAY_URL}/v1/chat/completions`, {
+    headers: { Authorization: 'Bearer e2e-gateway-key' },
+    data: {
+      model: 'default',
+      messages: [{ role: 'user', content: 'Hermetic loopback probe.' }],
+      stream: false,
+      effort: 'low',
+    },
+  });
+  expect(response.ok()).toBeTruthy();
+  const completion = (await response.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  expect(completion.choices?.[0]?.message?.content).toBe(DETERMINISTIC_ANSWER);
+  await expect.poll(() => readStubRequests(request)).toEqual([expectedRequest(4_096, false)]);
 });
 
 test('routes every response depth through Gateway while preserving the conversation choice', async ({
