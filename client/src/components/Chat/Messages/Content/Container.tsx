@@ -1,4 +1,5 @@
-import { TMessage } from 'librechat-data-provider';
+import type { TMessage } from 'librechat-data-provider';
+import { EffortBadge } from '../../EffortSelector';
 import MessageQuotes from './MessageQuotes';
 import SkillPills from './SkillPills';
 import Files from './Files';
@@ -14,6 +15,7 @@ const Container = ({ children, message }: { children: React.ReactNode; message?:
         <Files message={message} />
         <SkillPills skills={message.alwaysAppliedSkills} source="always-apply" />
         <SkillPills skills={message.manualSkills} source="manual" />
+        <EffortBadge effort={message.metadata?.sgEffort} />
       </>
     )}
     {children}

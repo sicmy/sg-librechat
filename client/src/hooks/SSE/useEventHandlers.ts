@@ -40,6 +40,7 @@ import {
   markTitleGenerationProcessed,
 } from '~/data-provider';
 import useFocusRegeneratedResponse from '~/hooks/Chat/useFocusRegeneratedResponse';
+import { getSgEffort } from '~/utils/endpoints';
 import { shouldResetSubagentAtomsOnConversationChange } from './cleanup';
 import useAttachmentHandler from '~/hooks/SSE/useAttachmentHandler';
 import useContentHandler from '~/hooks/SSE/useContentHandler';
@@ -69,6 +70,27 @@ type TTitleEvent = {
 
 const hasRealTitle = (title?: string | null): title is string =>
   title != null && title !== '' && title !== 'New Chat';
+
+export const resolveFinalReasoningEffort = (
+  currentEffort: TConversation['reasoning_effort'],
+  submittedEffort: TConversation['reasoning_effort'],
+  serverEffort: TConversation['reasoning_effort'],
+  submittedConversation?: Pick<TConversation, 'endpoint' | 'model' | 'reasoning_effort'> | null,
+  effectiveSubmittedEffort?: TConversation['reasoning_effort'],
+): TConversation['reasoning_effort'] => {
+  if (getSgEffort(submittedConversation) == null) {
+    return serverEffort;
+  }
+
+  const normalizedCurrentEffort = getSgEffort({
+    ...submittedConversation,
+    reasoning_effort: currentEffort,
+  });
+  const comparedSubmittedEffort = effectiveSubmittedEffort ?? submittedEffort;
+  return normalizedCurrentEffort !== comparedSubmittedEffort
+    ? normalizedCurrentEffort
+    : (serverEffort ?? normalizedCurrentEffort);
+};
 
 /** Skill caches refreshed when a chat turn authors a skill via `create_file`/`edit_file`. */
 const SKILL_QUERY_KEYS = [
@@ -829,9 +851,17 @@ export default function useEventHandlers({
          *  generating before the Stop, so the local one stays in sync. */
         if (setConversation && isAddedRequest !== true) {
           setConversation((prevState) => {
+            const reasoningEffort = resolveFinalReasoningEffort(
+              prevState?.reasoning_effort,
+              submissionConvo.reasoning_effort,
+              serverConversation.reasoning_effort,
+              submissionConvo,
+              submission.endpointOption?.reasoning_effort as TConversation['reasoning_effort'],
+            );
             const update = {
               ...prevState,
               ...(conversation as TConversation),
+              reasoning_effort: reasoningEffort,
             };
             if (prevState?.model != null && prevState.model !== submissionConvo.model) {
               update.model = prevState.model;
@@ -847,6 +877,7 @@ export default function useEventHandlers({
                   const merged = {
                     ...cachedConvo,
                     ...serverConversation,
+                    reasoning_effort: reasoningEffort,
                   } as TConversation;
                   const cachedTitle = cachedConvo?.title;
                   if (!hasRealTitle(serverConversation.title) && hasRealTitle(cachedTitle)) {

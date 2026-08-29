@@ -1,5 +1,5 @@
 import { renderHook, act } from '@testing-library/react';
-import { Constants, EModelEndpoint } from 'librechat-data-provider';
+import { Constants, QueryKeys, EModelEndpoint } from 'librechat-data-provider';
 import type { TConversation, TMessage, TSubmission } from 'librechat-data-provider';
 import useChatFunctions from '../useChatFunctions';
 
@@ -98,7 +98,12 @@ const conversation = (conversationId: string) =>
 function renderAsk(
   messages: TMessage[] | undefined,
   conversationId = 'conversation-1',
-  options: { endpoint?: TConversation['endpoint']; isSubmitting?: boolean } = {},
+  options: {
+    endpoint?: TConversation['endpoint'];
+    model?: TConversation['model'];
+    reasoningEffort?: TConversation['reasoning_effort'];
+    isSubmitting?: boolean;
+  } = {},
 ) {
   const setMessages = jest.fn();
   const setSubmission = jest.fn();
@@ -106,6 +111,12 @@ function renderAsk(
   const immutableConversation = conversation(conversationId);
   if ('endpoint' in options) {
     immutableConversation.endpoint = options.endpoint ?? null;
+  }
+  if ('model' in options) {
+    immutableConversation.model = options.model;
+  }
+  if ('reasoningEffort' in options) {
+    immutableConversation.reasoning_effort = options.reasoningEffort;
   }
   const hook = renderHook(() =>
     useChatFunctions({
@@ -229,6 +240,30 @@ describe('useChatFunctions ask', () => {
     expect(setMessages).toHaveBeenCalled();
     expect(setSubmission).toHaveBeenCalled();
   });
+
+  it.each([
+    ['the default', undefined, 'high'],
+    ['the selected value', 'max', 'max'],
+  ])('snapshots %s SG Gateway effort on the submitted turn', (_label, effort, expected) => {
+    mockGetQueryData.mockImplementation((queryKey: unknown) =>
+      Array.isArray(queryKey) && queryKey[0] === QueryKeys.endpoints
+        ? { 'SG AI Gateway': { type: EModelEndpoint.custom } }
+        : {},
+    );
+    const { result, setSubmission } = renderAsk([], 'conversation-1', {
+      endpoint: 'SG AI Gateway',
+      model: 'default',
+      reasoningEffort: effort as TConversation['reasoning_effort'],
+    });
+
+    act(() => {
+      result.current.ask({ text: 'Hello', conversationId: 'conversation-1' });
+    });
+
+    const submission = setSubmission.mock.calls.at(-1)?.[0] as TSubmission;
+    expect(submission.endpointOption.reasoning_effort).toBe(expected);
+    expect(submission.userMessage.metadata).toEqual({ sgEffort: expected });
+  });
 });
 
 describe('useChatFunctions regenerate', () => {
@@ -290,5 +325,33 @@ describe('useChatFunctions regenerate', () => {
       setMessages.mock.calls.at(-1)?.[0].map((message: TMessage) => message.messageId),
     ).toEqual(['user-1', 'assistant-1_']);
     expect(messages.at(-1)?.messageId).toBe('assistant-1_');
+  });
+
+  it('reuses the original user turn effort when regenerating', () => {
+    mockGetQueryData.mockImplementation((queryKey: unknown) =>
+      Array.isArray(queryKey) && queryKey[0] === QueryKeys.endpoints
+        ? { 'SG AI Gateway': { type: EModelEndpoint.custom } }
+        : {},
+    );
+    const messages = [
+      {
+        ...userMessage('user-1'),
+        metadata: { sgEffort: 'low' },
+      } as TMessage,
+      assistantMessage('assistant-1', 'user-1'),
+    ];
+    const { result, setSubmission } = renderAsk(messages, 'conversation-1', {
+      endpoint: 'SG AI Gateway',
+      model: 'default',
+      reasoningEffort: 'max',
+    });
+
+    act(() => {
+      result.current.regenerate(messages[1]);
+    });
+
+    const submission = setSubmission.mock.calls.at(-1)?.[0] as TSubmission;
+    expect(submission.endpointOption.reasoning_effort).toBe('low');
+    expect(submission.messages[0].metadata).toEqual({ sgEffort: 'low' });
   });
 });

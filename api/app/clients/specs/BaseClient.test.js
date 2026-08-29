@@ -1909,6 +1909,65 @@ describe('BaseClient', () => {
     });
   });
 
+  describe('sendMessage SG Gateway effort', () => {
+    test('persists the submitted effort on the user message', async () => {
+      TestClient.options.req = {
+        body: {
+          endpoint: 'SG AI Gateway',
+          model: 'default',
+          reasoning_effort: 'max',
+        },
+      };
+      TestClient.saveMessageToDatabase = jest.fn().mockResolvedValue({ message: {} });
+
+      await TestClient.sendMessage('Use more reasoning');
+
+      const userSave = TestClient.saveMessageToDatabase.mock.calls.find(
+        ([msg]) => msg.isCreatedByUser,
+      );
+      expect(userSave[0].metadata).toEqual({ sgEffort: 'max' });
+    });
+
+    test.each([
+      ['an unsupported effort', 'SG AI Gateway', 'default', 'medium'],
+      ['another endpoint', 'Other Gateway', 'default', 'max'],
+      ['another model', 'SG AI Gateway', 'other-model', 'max'],
+    ])('does not persist %s as SG effort metadata', async (_case, endpoint, model, effort) => {
+      TestClient.options.req = {
+        body: {
+          endpoint,
+          model,
+          reasoning_effort: effort,
+        },
+      };
+      TestClient.saveMessageToDatabase = jest.fn().mockResolvedValue({ message: {} });
+
+      await TestClient.sendMessage('Use unsupported reasoning');
+
+      const userSave = TestClient.saveMessageToDatabase.mock.calls.find(
+        ([msg]) => msg.isCreatedByUser,
+      );
+      expect(userSave[0].metadata).toBeUndefined();
+    });
+
+    test('records High when SG Gateway effort is omitted', async () => {
+      TestClient.options.req = {
+        body: {
+          endpoint: 'SG AI Gateway',
+          model: 'default',
+        },
+      };
+      TestClient.saveMessageToDatabase = jest.fn().mockResolvedValue({ message: {} });
+
+      await TestClient.sendMessage('Use default reasoning');
+
+      const userSave = TestClient.saveMessageToDatabase.mock.calls.find(
+        ([msg]) => msg.isCreatedByUser,
+      );
+      expect(userSave[0].metadata).toEqual({ sgEffort: 'high' });
+    });
+  });
+
   describe('mergeEditedContent phase boundaries', () => {
     test('does not merge commentary into a final answer', () => {
       const existing = [

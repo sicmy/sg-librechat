@@ -91,6 +91,7 @@ const TOOL_ATTACHMENT_KEYS = [
   Tools.ui_resources,
   Tools.memory,
 ];
+const SG_GATEWAY_EFFORTS = new Set(['low', 'high', 'max']);
 const DISPLAY_ATTACHMENT_FIELDS = [
   'filename',
   'filepath',
@@ -659,6 +660,19 @@ class BaseClient {
         if (skills.length > 0) {
           userMessage.manualSkills = skills;
         }
+      }
+      const requestBody = this.options.req?.body;
+      const requestedEffort =
+        requestBody?.reasoning_effort === undefined ? 'high' : requestBody.reasoning_effort;
+      if (
+        requestBody?.endpoint === 'SG AI Gateway' &&
+        requestBody.model === 'default' &&
+        SG_GATEWAY_EFFORTS.has(requestedEffort)
+      ) {
+        userMessage.metadata = {
+          ...userMessage.metadata,
+          sgEffort: requestedEffort,
+        };
       }
       /**
        * Persist the names of skills auto-primed this turn via `always-apply`

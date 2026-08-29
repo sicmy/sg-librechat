@@ -5,7 +5,50 @@ import {
   getExistingConversationAbortMessages,
   isInitialNewConversationSubmission,
   mergeRegenerateFinalMessages,
+  resolveFinalReasoningEffort,
 } from '~/hooks/SSE/useEventHandlers';
+
+describe('resolveFinalReasoningEffort', () => {
+  it('keeps a selection made while the previous response was running', () => {
+    expect(
+      resolveFinalReasoningEffort('max', 'low', 'low', {
+        endpoint: 'SG AI Gateway',
+        model: 'default',
+        reasoning_effort: 'low',
+      }),
+    ).toBe('max');
+  });
+
+  it('leaves non-SG endpoint finalization under server control', () => {
+    expect(
+      resolveFinalReasoningEffort('max', 'low', 'low', {
+        endpoint: 'Other Gateway',
+        model: 'default',
+      }),
+    ).toBe('low');
+  });
+
+  it('compares the selector with the effective regeneration effort', () => {
+    expect(
+      resolveFinalReasoningEffort(
+        'max',
+        'max',
+        'low',
+        { endpoint: 'SG AI Gateway', model: 'default' },
+        'low',
+      ),
+    ).toBe('max');
+  });
+
+  it('treats an omitted current SG effort as High', () => {
+    expect(
+      resolveFinalReasoningEffort(undefined, 'high', 'high', {
+        endpoint: 'SG AI Gateway',
+        model: 'default',
+      }),
+    ).toBe('high');
+  });
+});
 
 describe('buildCreatedInitialResponse', () => {
   const userMessage = {

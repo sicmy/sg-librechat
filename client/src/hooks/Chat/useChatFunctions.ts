@@ -36,6 +36,7 @@ import {
 import useFocusRegeneratedResponse from '~/hooks/Chat/useFocusRegeneratedResponse';
 import useSetFilesToDelete from '~/hooks/Files/useSetFilesToDelete';
 import useGetSender from '~/hooks/Conversations/useGetSender';
+import { getSgEffort } from '~/utils/endpoints';
 import store, { useGetEphemeralAgent } from '~/store';
 import { startupConfigKey } from '~/data-provider';
 import useUserKey from '~/hooks/Input/useUserKey';
@@ -410,8 +411,6 @@ export default function useChatFunctions({
       conversationId === Constants.NEW_CONVO
         ? getRouteChatProjectId()
         : (conversation?.chatProjectId ?? null);
-    const conversationForPayload =
-      chatProjectId != null ? { ...(conversation ?? {}), chatProjectId } : (conversation ?? {});
 
     // construct the query message
     // this is not a real messageId, it is used as placeholder before real messageId returned
@@ -460,6 +459,20 @@ export default function useChatFunctions({
           latestMessage,
         })
       : null;
+    const originalSgEffort = targetParentMessage?.metadata?.sgEffort;
+    const sgEffort = getSgEffort(
+      isRegenerate && typeof originalSgEffort === 'string'
+        ? {
+            ...conversation,
+            reasoning_effort: originalSgEffort as TConversation['reasoning_effort'],
+          }
+        : conversation,
+    );
+    const conversationForPayload = {
+      ...(conversation ?? {}),
+      ...(chatProjectId != null ? { chatProjectId } : {}),
+      ...(sgEffort != null ? { reasoning_effort: sgEffort } : {}),
+    };
 
     let thread_id = targetParentMessage?.thread_id ?? latestMessage?.thread_id;
     if (thread_id == null) {
@@ -510,6 +523,7 @@ export default function useChatFunctions({
       messageId: isContinued && messageId != null && messageId ? messageId : intermediateId,
       thread_id,
       error: false,
+      ...(sgEffort != null ? { metadata: { sgEffort } } : {}),
       /**
        * UI-only metadata. Survives reload because the backend persists the
        * field on the message schema, and `SkillPills` reads straight

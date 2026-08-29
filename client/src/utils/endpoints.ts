@@ -1,6 +1,7 @@
 import {
   Constants,
   EModelEndpoint,
+  ReasoningEffort,
   defaultEndpoints,
   modularEndpoints,
   LocalStorageKeys,
@@ -90,6 +91,25 @@ export function mapEndpoints(endpointsConfig: t.TEndpointsConfig) {
 }
 
 const firstLocalConvoKey = LocalStorageKeys.LAST_CONVO_SETUP + '_0';
+
+export type SgEffort = ReasoningEffort.low | ReasoningEffort.high | ReasoningEffort.max;
+
+const sgEfforts = new Set<ReasoningEffort>([
+  ReasoningEffort.low,
+  ReasoningEffort.high,
+  ReasoningEffort.max,
+]);
+
+export function getSgEffort(
+  conversation?: Pick<t.TConversation, 'endpoint' | 'model' | 'reasoning_effort'> | null,
+): SgEffort | undefined {
+  if (conversation?.endpoint !== 'SG AI Gateway' || conversation.model !== 'default') {
+    return;
+  }
+
+  const configuredEffort = conversation.reasoning_effort ?? ReasoningEffort.high;
+  return sgEfforts.has(configuredEffort) ? (configuredEffort as SgEffort) : ReasoningEffort.high;
+}
 
 /**
  * Ensures the last selected model stays up to date, as conversation may

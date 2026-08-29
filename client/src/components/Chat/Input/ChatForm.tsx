@@ -33,6 +33,7 @@ import { mainTextareaId, BadgeItem } from '~/common';
 import PendingSteerChips from './PendingSteerChips';
 import PendingQuoteChips from './PendingQuoteChips';
 import AttachFileChat from './Files/AttachFileChat';
+import EffortSelector from '../EffortSelector';
 import useSteering from '~/hooks/Chat/useSteering';
 import FileFormChat from './Files/FileFormChat';
 import InFlightSteers from './InFlightSteers';
@@ -644,7 +645,7 @@ const ChatForm = memo(function ChatForm({
                   isRTL ? 'flex-row-reverse' : 'flex-row',
                 )}
               >
-                <div className={`${isRTL ? 'mr-2' : 'ml-2'}`}>
+                <div className={cn('flex items-center gap-1', isRTL ? 'mr-2' : 'ml-2')}>
                   <AttachFileChat
                     conversation={conversation}
                     disableInputs={disableInputs}
@@ -652,6 +653,7 @@ const ChatForm = memo(function ChatForm({
                     setFiles={setFiles}
                     setFilesLoading={setFilesLoading}
                   />
+                  <EffortSelector disabled={disableInputs} />
                 </div>
                 <BadgeRow
                   showEphemeralBadges={
