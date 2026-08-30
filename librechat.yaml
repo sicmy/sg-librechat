@@ -1,6 +1,21 @@
 version: 1.3.14
 cache: true
 
+interface:
+  modelSelect: false
+  parameters: false
+
+modelSpecs:
+  prioritize: true
+  enforce: true
+  list:
+    - name: sg-default
+      label: SG AI Gateway
+      default: true
+      preset:
+        endpoint: SG AI Gateway
+        model: default
+
 endpoints:
   allowedAddresses:
     - host.docker.internal:4000
@@ -8,13 +23,13 @@ endpoints:
     - name: SG AI Gateway
       apiKey: "${SG_GATEWAY_API_KEY}"
       baseURL: http://host.docker.internal:4000/v1
+      customParams:
+        defaultParamsEndpoint: custom
+        sgFileGateway: true
       models:
         default:
-          - general
-          - reasoning
-          - vision
-          - validation-alt
+          - default
         fetch: true
       titleConvo: true
-      titleModel: general
+      titleModel: default
       modelDisplayLabel: SG AI Gateway

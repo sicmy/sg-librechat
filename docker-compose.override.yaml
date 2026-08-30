@@ -1,5 +1,11 @@
 services:
   api:
+    image: sg-librechat-task2e:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports: !override
+      - "5080:3080"
     environment:
       SG_GATEWAY_API_KEY: ${SG_GATEWAY_API_KEY}
     volumes:
