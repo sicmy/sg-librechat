@@ -28,6 +28,7 @@ const mockLocalize = jest.fn((key: string) => key);
 
 let mockConversation: Record<string, string | null | undefined> = {};
 let mockIsTemporary = false;
+let mockEndpointsConfig: Record<string, unknown> = {};
 
 jest.mock('~/Providers/ChatContext', () => ({
   useChatContext: jest.fn(() => ({
@@ -48,11 +49,15 @@ jest.mock('recoil', () => ({
   ...jest.requireActual('recoil'),
   useSetRecoilState: jest.fn(() => jest.fn()),
   useRecoilValue: jest.fn(() => mockIsTemporary),
+  useRecoilState: jest.fn(() => [null, jest.fn()]),
 }));
 
 jest.mock('~/store', () => ({
   __esModule: true,
-  default: { isTemporary: { key: 'isTemporary' } },
+  default: {
+    isTemporary: { key: 'isTemporary' },
+    sgGatewayScopeByConvoId: jest.fn(() => ({ key: 'sg-gateway-scope' })),
+  },
   ephemeralAgentByConvoId: jest.fn(() => ({ key: 'mock' })),
 }));
 
@@ -65,6 +70,7 @@ jest.mock('@tanstack/react-query', () => ({
 
 jest.mock('~/data-provider', () => ({
   useGetFileConfig: jest.fn(() => ({ data: null })),
+  useGetEndpointsQuery: jest.fn(() => ({ data: mockEndpointsConfig })),
   useUploadFileMutation: jest.fn((_opts: Record<string, unknown>) => ({
     mutate: mockMutate,
   })),
@@ -121,6 +127,7 @@ describe('useFileHandling', () => {
     mockProcessFileForUpload.mockImplementation(async (file: File) => file);
     mockConversation = {};
     mockIsTemporary = false;
+    mockEndpointsConfig = {};
   });
 
   const loadHook = async () => (await import('../useFileHandling')).default;
@@ -182,6 +189,36 @@ describe('useFileHandling', () => {
         fileConfig: null,
       });
       expect(validateCall.endpointFileConfig).toEqual(configResult);
+    });
+
+    it('uses one draft scope for every SG Gateway file in the same batch', async () => {
+      mockConversation = {
+        conversationId: Constants.NEW_CONVO,
+        endpoint: 'SG AI Gateway',
+        endpointType: 'custom',
+      };
+      mockEndpointsConfig = {
+        'SG AI Gateway': {
+          customParams: { defaultParamsEndpoint: 'custom', sgFileGateway: true },
+        },
+      };
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+
+      await act(async () => {
+        await result.current.handleFiles([
+          new File(['first'], 'first.txt', { type: 'text/plain' }),
+          new File(['second'], 'second.txt', { type: 'text/plain' }),
+        ]);
+      });
+
+      expect(mockMutate).toHaveBeenCalledTimes(2);
+      const first = mockMutate.mock.calls[0][0] as FormData;
+      const second = mockMutate.mock.calls[1][0] as FormData;
+      expect(first.get('conversationId')).toMatch(/^draft-/);
+      expect(second.get('conversationId')).toBe(first.get('conversationId'));
+      expect(first.get('sg_file_gateway')).toBe('true');
+      expect(second.get('sg_file_gateway')).toBe('true');
     });
 
     it('uses endpointOverride for validation instead of conversation endpoint', async () => {

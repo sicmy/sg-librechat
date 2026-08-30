@@ -32,15 +32,16 @@ export const useUploadFileMutation = (
       const height = body.get('height') ?? '';
       const version = body.get('version') ?? '';
       const endpoint = (body.get('endpoint') ?? '') as string;
+      const uploadSseEnabled = sseEnabled && body.get('sg_file_gateway') !== 'true';
       if (isAssistantsEndpoint(endpoint) && version === '2') {
-        return dataService.uploadFile(body, signal, sseEnabled);
+        return dataService.uploadFile(body, signal, uploadSseEnabled);
       }
 
       if (width !== '' && height !== '') {
-        return dataService.uploadImage(body, signal, sseEnabled);
+        return dataService.uploadImage(body, signal, uploadSseEnabled);
       }
 
-      return dataService.uploadFile(body, signal, sseEnabled);
+      return dataService.uploadFile(body, signal, uploadSseEnabled);
     },
     ...options,
     onSuccess: (data, formData, context) => {
@@ -138,6 +139,17 @@ export const useUploadFileMutation = (
       );
       onSuccess?.(data, formData, context);
     },
+  });
+};
+
+export const useRetrySGFileMutation = (): UseMutationResult<
+  t.TFilePreview,
+  unknown,
+  string,
+  unknown
+> => {
+  return useMutation([MutationKeys.sgFileRetry], {
+    mutationFn: (fileId: string) => dataService.retryFileProcessing(fileId),
   });
 };
 

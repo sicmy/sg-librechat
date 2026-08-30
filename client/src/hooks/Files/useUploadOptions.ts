@@ -11,7 +11,7 @@ import type { EToolResources } from 'librechat-data-provider';
 import useAgentToolPermissions from '~/hooks/Agents/useAgentToolPermissions';
 import useAgentCapabilities from '~/hooks/Agents/useAgentCapabilities';
 import useGetAgentsConfig from '~/hooks/Agents/useGetAgentsConfig';
-import { useGetFileConfig } from '~/data-provider';
+import { useGetEndpointsQuery, useGetFileConfig } from '~/data-provider';
 import { ephemeralAgentByConvoId } from '~/store';
 import { getViableUploadOptions } from '~/utils';
 import { useDragDropContext } from '~/Providers';
@@ -33,6 +33,8 @@ export default function useUploadOptions() {
   const { data: fileConfig = null } = useGetFileConfig({
     select: (data) => mergeFileConfig(data),
   });
+  const { data: endpointsConfig } = useGetEndpointsQuery();
+  const usesSGFileGateway = endpointsConfig?.[endpoint ?? '']?.customParams?.sgFileGateway === true;
 
   /**
    * Tools are offerable unless a saved agent omits them; in direct/ephemeral chats selecting
@@ -47,8 +49,11 @@ export default function useUploadOptions() {
   const endpointSupportedMimeTypes = endpointFileConfig.supportedMimeTypes;
 
   const getOptions = useCallback(
-    (files: File[]): (EToolResources | undefined)[] =>
-      getViableUploadOptions(files, {
+    (files: File[]): (EToolResources | undefined)[] => {
+      if (usesSGFileGateway) {
+        return [undefined];
+      }
+      return getViableUploadOptions(files, {
         provider,
         endpoint,
         endpointType,
@@ -60,7 +65,8 @@ export default function useUploadOptions() {
         codeAllowedByAgent,
         fileConfig,
         endpointSupportedMimeTypes,
-      }),
+      });
+    },
     [
       provider,
       endpoint,
@@ -73,6 +79,7 @@ export default function useUploadOptions() {
       codeAllowedByAgent,
       fileConfig,
       endpointSupportedMimeTypes,
+      usesSGFileGateway,
     ],
   );
 

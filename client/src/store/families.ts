@@ -117,6 +117,11 @@ const filesByIndex = atomFamily<Map<string, ExtendedFile>, string | number>({
   default: new Map(),
 });
 
+const sgGatewayScopeByConvoId = atomFamily<string | null, string>({
+  key: 'sgGatewayScopeByConvoId',
+  default: null,
+});
+
 const conversationKeysAtom = atom<(string | number)[]>({
   key: 'conversationKeys',
   default: [],
@@ -677,6 +682,7 @@ export default {
   conversationKeysAtom,
   conversationByIndex,
   filesByIndex,
+  sgGatewayScopeByConvoId,
   presetByIndex,
   submissionByIndex,
   textByIndex,

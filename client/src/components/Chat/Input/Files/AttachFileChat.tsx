@@ -62,6 +62,7 @@ function AttachFileChat({
   });
 
   const { data: endpointsConfig } = useGetEndpointsQuery();
+  const usesSGFileGateway = endpointsConfig?.[endpoint ?? '']?.customParams?.sgFileGateway === true;
 
   const agentProvider = useMemo(() => {
     if (!isAgents || !conversation?.agent_id) {
@@ -97,7 +98,17 @@ function AttachFileChat({
     [disableInputs, endpointFileConfig?.disabled],
   );
 
-  if (isAssistants && endpointSupportsFiles && !isUploadDisabled) {
+  if (usesSGFileGateway && !isUploadDisabled) {
+    return (
+      <AttachFile
+        disabled={disableInputs}
+        files={files}
+        setFiles={setFiles}
+        setFilesLoading={setFilesLoading}
+        conversation={conversation}
+      />
+    );
+  } else if (isAssistants && endpointSupportsFiles && !isUploadDisabled) {
     return (
       <AttachFile
         disabled={disableInputs}

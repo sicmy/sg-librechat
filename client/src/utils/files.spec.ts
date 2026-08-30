@@ -1,3 +1,4 @@
+import { FileSources } from 'librechat-data-provider';
 import type { ExtendedFile } from '~/common';
 import { hasIncompleteFiles, normalizeExportFilename } from './files';
 
@@ -24,6 +25,14 @@ describe('hasIncompleteFiles', () => {
     ]);
 
     expect(hasIncompleteFiles(files)).toBe(false);
+  });
+
+  it('does not block chat while an uploaded SG Gateway file is being analyzed', () => {
+    const file = createFile('gateway-file', 0.9);
+    file.source = FileSources.sg_gateway;
+    file.status = 'pending';
+
+    expect(hasIncompleteFiles(new Map([[file.file_id, file]]))).toBe(false);
   });
 });
 

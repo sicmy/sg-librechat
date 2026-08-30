@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import { FileSources } from 'librechat-data-provider';
 import type { ExtendedFile } from '~/common';
@@ -11,6 +11,8 @@ jest.mock('~/hooks', () => ({
 
 jest.mock('~/data-provider', () => ({
   useDeleteFilesMutation: jest.fn(),
+  useFilePreview: jest.fn(() => ({ data: undefined })),
+  useRetrySGFileMutation: jest.fn(),
 }));
 
 jest.mock('~/hooks/Files', () => ({
@@ -22,6 +24,10 @@ jest.mock('~/utils', () => ({
     log: jest.fn(),
   },
   getCachedPreview: jest.fn(() => undefined),
+  isBlockingFileUpload: jest.fn(
+    (file: ExtendedFile) =>
+      file.progress < 1 && !(file.source === 'sg_gateway' && file.status === 'pending'),
+  ),
 }));
 
 jest.mock('../Image', () => {
@@ -37,17 +43,19 @@ jest.mock('../Image', () => {
 });
 
 jest.mock('../FileContainer', () => {
-  return function MockFileContainer({ file }: any) {
+  return function MockFileContainer({ file, subtitle, onClick }: any) {
     return (
-      <div data-testid="mock-file-container">
+      <button type="button" data-testid="mock-file-container" onClick={onClick}>
         <span data-testid="file-name">{file.filename}</span>
-      </div>
+        <span data-testid="file-subtitle">{subtitle}</span>
+      </button>
     );
   };
 });
 
 const mockUseLocalize = jest.requireMock('~/hooks').useLocalize;
 const mockUseDeleteFilesMutation = jest.requireMock('~/data-provider').useDeleteFilesMutation;
+const mockUseRetrySGFileMutation = jest.requireMock('~/data-provider').useRetrySGFileMutation;
 const mockUseFileDeletion = jest.requireMock('~/hooks/Files').useFileDeletion;
 
 describe('FileRow', () => {
@@ -61,12 +69,19 @@ describe('FileRow', () => {
     mockUseLocalize.mockReturnValue((key: string) => {
       const translations: Record<string, string> = {
         com_ui_deleting_file: 'Deleting file...',
+        com_ui_analyzing: 'Analyzing',
+        com_ui_analyzing_finished: 'Finished analyzing',
+        com_error_files_process: 'File analysis failed',
       };
       return translations[key] || key;
     });
 
     mockUseDeleteFilesMutation.mockReturnValue({
       mutateAsync: jest.fn(),
+    });
+    mockUseRetrySGFileMutation.mockReturnValue({
+      isLoading: false,
+      mutate: jest.fn(),
     });
 
     mockUseFileDeletion.mockReturnValue({
@@ -196,6 +211,36 @@ describe('FileRow', () => {
   });
 
   describe('File Source', () => {
+    it('renders one status-aware file chip for an SG Gateway image', () => {
+      const file = createMockFile({
+        source: FileSources.sg_gateway,
+        status: 'pending',
+        progress: 0.9,
+      });
+
+      renderFileRow(new Map([[file.file_id, file]]));
+
+      expect(screen.queryByTestId('mock-image')).not.toBeInTheDocument();
+      expect(screen.getByTestId('mock-file-container')).toBeInTheDocument();
+      expect(screen.getByText('Analyzing')).toBeInTheDocument();
+      expect(mockSetFilesLoading).toHaveBeenCalledWith(false);
+    });
+
+    it('retries a failed SG Gateway file from the existing file chip', () => {
+      const mutate = jest.fn();
+      mockUseRetrySGFileMutation.mockReturnValue({ isLoading: false, mutate });
+      const file = createMockFile({
+        source: FileSources.sg_gateway,
+        status: 'failed',
+        progress: 1,
+      });
+
+      renderFileRow(new Map([[file.file_id, file]]));
+      fireEvent.click(screen.getByTestId('mock-file-container'));
+
+      expect(mutate).toHaveBeenCalledWith(file.file_id, expect.any(Object));
+    });
+
     it('should pass local source to Image component', () => {
       const file = createMockFile({
         source: FileSources.local,

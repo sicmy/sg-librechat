@@ -596,6 +596,8 @@ export interface ExtendedFile {
   preview?: string;
   progress: number;
   source?: FileSources;
+  status?: 'pending' | 'ready' | 'failed';
+  previewError?: string;
   attached?: boolean;
   embedded?: boolean;
   tool_resource?: string;

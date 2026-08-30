@@ -3,10 +3,11 @@ import { v4 } from 'uuid';
 import debounce from 'lodash/debounce';
 import { useToastContext } from '@librechat/client';
 import { useQueryClient } from '@tanstack/react-query';
-import { useRecoilValue, useSetRecoilState } from 'recoil';
+import { useRecoilState, useRecoilValue, useSetRecoilState } from 'recoil';
 import {
   QueryKeys,
   Constants,
+  FileSources,
   EToolResources,
   mergeFileConfig,
   isAssistantsEndpoint,
@@ -17,7 +18,7 @@ import type { EModelEndpoint, TEndpointsConfig, TError } from 'librechat-data-pr
 import type { TConversation } from 'librechat-data-provider';
 import type { ExtendedFile, FileSetter } from '~/common';
 import { logger, validateFiles, cachePreview, getCachedPreview, removePreviewEntry } from '~/utils';
-import { useGetFileConfig, useUploadFileMutation } from '~/data-provider';
+import { useGetEndpointsQuery, useGetFileConfig, useUploadFileMutation } from '~/data-provider';
 import useLocalize, { TranslationKeys } from '~/hooks/useLocalize';
 import { useDelayedUploadToast } from './useDelayedUploadToast';
 import { useChatContext } from '~/Providers/ChatContext';
@@ -76,10 +77,25 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
     () => endpointOverride ?? conversation?.endpoint ?? 'default',
     [endpointOverride, conversation?.endpoint],
   );
+  const conversationKey = conversation?.conversationId ?? Constants.NEW_CONVO;
+  const [sgDraftScope, setSGDraftScope] = useRecoilState(
+    store.sgGatewayScopeByConvoId(conversationKey),
+  );
+  const sgDraftScopeRef = useRef(sgDraftScope);
+  sgDraftScopeRef.current = sgDraftScope;
+
+  useEffect(() => {
+    if (conversationKey === Constants.NEW_CONVO && files.size === 0 && sgDraftScopeRef.current) {
+      sgDraftScopeRef.current = null;
+      setSGDraftScope(null);
+    }
+  }, [conversationKey, files.size, setSGDraftScope]);
 
   const { data: fileConfig = null } = useGetFileConfig({
     select: (data) => mergeFileConfig(data),
   });
+  const { data: endpointsConfig } = useGetEndpointsQuery();
+  const usesSGFileGateway = endpointsConfig?.[endpoint]?.customParams?.sgFileGateway === true;
 
   const displayToast = useCallback(() => {
     if (errors.length > 1) {
@@ -142,7 +158,6 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
           updateFileById(
             data.temp_file_id,
             {
-              progress: 1,
               file_id: data.file_id,
               temp_file_id: data.temp_file_id,
               filepath: data.filepath,
@@ -152,6 +167,11 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
               filename: data.filename,
               source: data.source,
               embedded: data.embedded,
+              status: data.status,
+              previewError: data.previewError,
+              metadata: data.metadata,
+              progress:
+                data.source === FileSources.sg_gateway && data.status === 'pending' ? 0.9 : 1,
             },
             assistant_id ? true : false,
           );
@@ -193,7 +213,19 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
     formData.append('endpointType', endpointType ?? '');
     formData.append('file', extendedFile.file as File, encodeURIComponent(filename));
     formData.append('file_id', extendedFile.file_id);
-    if (
+    if (usesSGFileGateway && isConversationUpload) {
+      let scope =
+        conversation?.conversationId && conversation.conversationId !== Constants.NEW_CONVO
+          ? conversation.conversationId
+          : sgDraftScopeRef.current;
+      if (!scope) {
+        scope = `draft-${v4()}`;
+        sgDraftScopeRef.current = scope;
+        setSGDraftScope(scope);
+      }
+      formData.append('conversationId', scope);
+      formData.append('sg_file_gateway', 'true');
+    } else if (
       isConversationUpload &&
       conversation?.conversationId &&
       conversation.conversationId !== Constants.NEW_CONVO

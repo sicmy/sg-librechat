@@ -1,9 +1,10 @@
 import { useEffect } from 'react';
 import { useToastContext } from '@librechat/client';
-import { EToolResources } from 'librechat-data-provider';
+import { CircleAlert, CircleCheck, LoaderCircle } from 'lucide-react';
+import { EToolResources, FileSources } from 'librechat-data-provider';
 import type { ExtendedFile } from '~/common';
-import { useDeleteFilesMutation } from '~/data-provider';
-import { logger, getCachedPreview } from '~/utils';
+import { useDeleteFilesMutation, useFilePreview, useRetrySGFileMutation } from '~/data-provider';
+import { logger, getCachedPreview, isBlockingFileUpload } from '~/utils';
 import { useFileDeletion } from '~/hooks/Files';
 import FileContainer from './FileContainer';
 import { useLocalize } from '~/hooks';
@@ -17,6 +18,104 @@ import Image from './Image';
 export const FileRowWrapper = ({ children }: { children: React.ReactNode }) => (
   <div className="flex flex-wrap gap-2">{children}</div>
 );
+
+function SGFileContainer({
+  file,
+  setFiles,
+  onDelete,
+}: {
+  file: ExtendedFile;
+  setFiles: React.Dispatch<React.SetStateAction<Map<string, ExtendedFile>>>;
+  onDelete: () => void;
+}) {
+  const localize = useLocalize();
+  const baseStatus = file.status ?? 'pending';
+  const statusQuery = useFilePreview(file.file_id, { enabled: baseStatus === 'pending' });
+  const retryMutation = useRetrySGFileMutation();
+  const status = retryMutation.isLoading ? 'pending' : (statusQuery.data?.status ?? baseStatus);
+
+  useEffect(() => {
+    if (!statusQuery.data || statusQuery.data.status === 'pending') {
+      return;
+    }
+    setFiles((current) => {
+      const existing = current.get(file.file_id);
+      if (
+        !existing ||
+        (existing.status === statusQuery.data?.status &&
+          existing.previewError === statusQuery.data?.previewError)
+      ) {
+        return current;
+      }
+      const next = new Map(current);
+      next.set(file.file_id, {
+        ...existing,
+        status: statusQuery.data.status,
+        previewError: statusQuery.data.previewError,
+        progress: 1,
+      });
+      return next;
+    });
+  }, [file.file_id, setFiles, statusQuery.data]);
+
+  const retry = () => {
+    if (status !== 'failed' || retryMutation.isLoading) {
+      return;
+    }
+    retryMutation.mutate(file.file_id, {
+      onSuccess: (result) => {
+        setFiles((current) => {
+          const existing = current.get(file.file_id);
+          if (!existing) {
+            return current;
+          }
+          const next = new Map(current);
+          next.set(file.file_id, {
+            ...existing,
+            status: result.status,
+            previewError: result.previewError,
+            progress: result.status === 'pending' ? 0.9 : 1,
+          });
+          return next;
+        });
+      },
+    });
+  };
+
+  const subtitle = (() => {
+    if (status === 'ready') {
+      return (
+        <div className="flex items-center gap-1 text-status-success">
+          <CircleCheck className="size-3.5" aria-hidden="true" />
+          <span>{localize('com_ui_analyzing_finished')}</span>
+        </div>
+      );
+    }
+    if (status === 'failed') {
+      return (
+        <div className="flex items-center gap-1 text-text-destructive">
+          <CircleAlert className="size-3.5" aria-hidden="true" />
+          <span>{localize('com_agents_error_retry')}</span>
+        </div>
+      );
+    }
+    return (
+      <div className="flex items-center gap-1 text-text-secondary">
+        <LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />
+        <span>{localize('com_ui_analyzing')}</span>
+      </div>
+    );
+  })();
+
+  return (
+    <FileContainer
+      file={file}
+      subtitle={subtitle}
+      onClick={status === 'failed' ? retry : undefined}
+      onDelete={onDelete}
+    />
+  );
+}
 
 export default function FileRow({
   files: _files,
@@ -73,14 +172,12 @@ export default function FileRow({
       return;
     }
 
-    if (files.some((file) => file.progress < 1)) {
+    if (files.some(isBlockingFileUpload)) {
       setFilesLoading(true);
       return;
     }
 
-    if (files.every((file) => file.progress === 1)) {
-      setFilesLoading(false);
-    }
+    setFilesLoading(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [files]);
 
@@ -119,7 +216,7 @@ export default function FileRow({
             },
             { map: new Map(), uniqueFiles: [] as ExtendedFile[] },
           )
-          .uniqueFiles.map((file: ExtendedFile, index: number) => {
+          .uniqueFiles.map((file: ExtendedFile) => {
             const handleDelete = () => {
               if (abortUpload && file.progress < 1) {
                 abortUpload();
@@ -133,26 +230,33 @@ export default function FileRow({
               deleteFile({ file, setFiles });
             };
             const isImage = file.type?.startsWith('image') ?? false;
+            const isSGFile = file.source === FileSources.sg_gateway;
+            let content: React.ReactNode;
+            if (isSGFile) {
+              content = <SGFileContainer file={file} setFiles={setFiles} onDelete={handleDelete} />;
+            } else if (isImage) {
+              content = (
+                <Image
+                  url={getCachedPreview(file.file_id) ?? file.preview ?? file.filepath}
+                  onDelete={handleDelete}
+                  progress={file.progress}
+                  source={file.source}
+                />
+              );
+            } else {
+              content = <FileContainer file={file} onDelete={handleDelete} />;
+            }
 
             return (
               <div
-                key={index}
+                key={file.file_id}
                 style={{
                   flexBasis: '70px',
                   flexGrow: 0,
                   flexShrink: 0,
                 }}
               >
-                {isImage ? (
-                  <Image
-                    url={getCachedPreview(file.file_id) ?? file.preview ?? file.filepath}
-                    onDelete={handleDelete}
-                    progress={file.progress}
-                    source={file.source}
-                  />
-                ) : (
-                  <FileContainer file={file} onDelete={handleDelete} />
-                )}
+                {content}
               </div>
             );
           })}

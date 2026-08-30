@@ -10,6 +10,7 @@ import {
   megabyte,
   Providers,
   QueryKeys,
+  FileSources,
   inferMimeType,
   excelMimeTypes,
   EToolResources,
@@ -27,9 +28,16 @@ import type { ExtendedFile } from '~/common';
 
 export const partialTypes = ['text/x-'];
 
+export function isBlockingFileUpload(file: ExtendedFile): boolean {
+  if (file.source === FileSources.sg_gateway && file.status === 'pending') {
+    return false;
+  }
+  return file.progress < 1;
+}
+
 export function hasIncompleteFiles(files: Map<string, ExtendedFile>): boolean {
   for (const file of files.values()) {
-    if (file.progress < 1) {
+    if (isBlockingFileUpload(file)) {
       return true;
     }
   }

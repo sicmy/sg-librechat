@@ -11,6 +11,12 @@ const mockEndpointsConfig: TEndpointsConfig = {
   [EModelEndpoint.agents]: { userProvide: false, order: 1 },
   [EModelEndpoint.assistants]: { userProvide: false, order: 2 },
   Moonshot: { type: EModelEndpoint.custom, userProvide: false, order: 9999 },
+  'SG AI Gateway': {
+    type: EModelEndpoint.custom,
+    userProvide: false,
+    order: 10000,
+    customParams: { defaultParamsEndpoint: 'custom', sgFileGateway: true },
+  },
 };
 
 const defaultFileConfig = mergeFileConfig({
@@ -88,6 +94,13 @@ describe('AttachFileChat', () => {
     it('renders AttachFileMenu for custom endpoint with file support', () => {
       renderComponent({ endpoint: 'Moonshot' });
       expect(screen.getByTestId('attach-file-menu')).toBeInTheDocument();
+    });
+
+    it('renders one direct attachment button for an SG file gateway endpoint', () => {
+      renderComponent({ endpoint: 'SG AI Gateway' });
+
+      expect(screen.getByTestId('attach-file')).toBeInTheDocument();
+      expect(screen.queryByTestId('attach-file-menu')).not.toBeInTheDocument();
     });
 
     it('renders null for null conversation', () => {
