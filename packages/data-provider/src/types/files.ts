@@ -16,7 +16,19 @@ export enum FileSources {
   vertexai_mistral_ocr = 'vertexai_mistral_ocr',
   text = 'text',
   document_parser = 'document_parser',
+  sg_gateway = 'sg_gateway',
 }
+
+export type SGFileState = 'UPLOADED' | 'PROCESSING' | 'READY' | 'FAILED';
+
+export type SGFileMetadata = {
+  endpoint: string;
+  jobId: string;
+  conversationId: string;
+  state: SGFileState;
+  retryable?: boolean;
+  errorCode?: string | null;
+};
 
 export const checkOpenAIStorage = (source: string) =>
   source === FileSources.openai || source === FileSources.azure;
@@ -162,6 +174,7 @@ export type TFile = {
      * resolve via `resolveCodeEnvRef`.
      */
     codeEnvRef?: CodeEnvRef;
+    sgGateway?: SGFileMetadata;
   };
   createdAt?: string | Date;
   updatedAt?: string | Date;

@@ -1081,6 +1081,8 @@ export const endpointSchema = baseEndpointSchema.merge(
         includeReasoningContent: z.boolean().optional(),
         /** Also reconstructs `reasoning_content` from persisted history across turns (implies `includeReasoningContent`). */
         includeReasoningHistory: z.boolean().optional(),
+        /** Routes conversation attachments through the trusted SG AI Gateway file lifecycle. */
+        sgFileGateway: z.boolean().optional(),
         paramDefinitions: z.array(paramDefinitionSchema).optional(),
       })
       .strict()

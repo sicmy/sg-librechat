@@ -313,6 +313,8 @@ export const fileDownload = (userId: string, fileId: string) =>
  * poll while background HTML extraction is in flight. See PR #12957. */
 export const filePreview = (fileId: string) =>
   `${BASE_URL}/api/files/${encodeURIComponent(fileId)}/preview`;
+export const fileRetry = (fileId: string) =>
+  `${BASE_URL}/api/files/${encodeURIComponent(fileId)}/retry`;
 export const fileConfig = () => `${BASE_URL}/api/files/config`;
 /** Owner-scoped usage touch so queued attachments outlive the upload-window TTL. */
 export const fileUsage = () => `${BASE_URL}/api/files/usage`;

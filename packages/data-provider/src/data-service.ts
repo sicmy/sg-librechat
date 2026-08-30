@@ -466,6 +466,10 @@ export const getFilePreview = (fileId: string): Promise<f.TFilePreview> => {
   return request.get(endpoints.filePreview(fileId));
 };
 
+export const retryFileProcessing = (fileId: string): Promise<f.TFilePreview> => {
+  return request.post(endpoints.fileRetry(fileId));
+};
+
 /** Preview status for a snapshotted file served through a shared link. */
 export const getSharedFilePreview = (shareId: string, fileId: string): Promise<f.TFilePreview> => {
   return request.get(endpoints.sharedFilePreview(shareId, fileId));

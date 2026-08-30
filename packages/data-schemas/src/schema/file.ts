@@ -135,6 +135,24 @@ const file: Schema<IMongoFile> = new Schema(
         ),
         default: undefined,
       },
+      sgGateway: {
+        type: new Schema(
+          {
+            endpoint: { type: String, required: true },
+            jobId: { type: String, required: true },
+            conversationId: { type: String, required: true },
+            state: {
+              type: String,
+              enum: ['UPLOADED', 'PROCESSING', 'READY', 'FAILED'],
+              required: true,
+            },
+            retryable: { type: Boolean },
+            errorCode: { type: String, maxlength: 200 },
+          },
+          { _id: false },
+        ),
+        default: undefined,
+      },
       /** Dispatch-order stamp of the last writer (or claimant, on insert):
        *  the background harvest's stale-output guard compares writer
        *  dispatch order so an older task settling late cannot overwrite a

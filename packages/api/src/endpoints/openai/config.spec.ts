@@ -43,6 +43,24 @@ describe('getOpenAIConfig', () => {
     expect((result.llmConfig as Record<string, unknown>).max_tokens).toBeUndefined();
   });
 
+  it('forwards trusted SG file context through custom model kwargs', () => {
+    const sgInternal = {
+      tenant_id: 'tenant-a',
+      user_id: 'user-a',
+      conversation_id: 'conversation-a',
+      message_id: 'message-a',
+      file_ids: ['file-a'],
+    };
+
+    const result = getOpenAIConfig(
+      mockApiKey,
+      { modelOptions: { model: 'default' }, addParams: { sg_internal: sgInternal } },
+      'SG AI Gateway',
+    );
+
+    expect(result.llmConfig.modelKwargs).toMatchObject({ sg_internal: sgInternal });
+  });
+
   it('should separate known and unknown params from addParams', () => {
     const addParams = {
       temperature: 0.5, // known param

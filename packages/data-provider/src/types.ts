@@ -536,6 +536,7 @@ export type TConfig = {
     reasoningKey?: ReasoningResponseKey;
     includeReasoningContent?: boolean;
     includeReasoningHistory?: boolean;
+    sgFileGateway?: boolean;
     paramDefinitions?: Partial<SettingDefinition>[];
   };
 };

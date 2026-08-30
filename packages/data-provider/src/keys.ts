@@ -100,6 +100,7 @@ export enum MutationKeys {
   createAgentApiKey = 'createAgentApiKey',
   deleteAgentApiKey = 'deleteAgentApiKey',
   fileUpload = 'fileUpload',
+  sgFileRetry = 'sgFileRetry',
   fileDelete = 'fileDelete',
   fileUsage = 'fileUsage',
   updatePreset = 'updatePreset',

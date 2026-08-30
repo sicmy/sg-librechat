@@ -1,5 +1,5 @@
 import { Document, Types } from 'mongoose';
-import type { CodeEnvRef } from 'librechat-data-provider';
+import type { CodeEnvRef, SGFileMetadata } from 'librechat-data-provider';
 
 export interface IMongoFile extends Omit<Document, 'model'> {
   user: Types.ObjectId;
@@ -70,6 +70,8 @@ export interface IMongoFile extends Omit<Document, 'model'> {
      * derive the sessionKey explicitly.
      */
     codeEnvRef?: CodeEnvRef;
+    /** SG AI Gateway job and exact conversation scope for lifecycle polling and deletion. */
+    sgGateway?: SGFileMetadata;
   };
   expiresAt?: Date;
   expiredAt?: Date | null;

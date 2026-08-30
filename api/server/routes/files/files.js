@@ -10,6 +10,12 @@ const {
   startUploadSseStream,
   resolveUploadErrorMessage,
   verifyAgentUploadPermission,
+  getCustomEndpointConfig,
+  isSGFileGatewayEndpoint,
+  uploadSGGatewayFile,
+  getSGGatewayFileStatus,
+  retrySGGatewayFile,
+  deleteSGGatewayFile,
 } = require('@librechat/api');
 const {
   Time,
@@ -50,6 +56,14 @@ const AGENT_TOOL_RESOURCE_KEYS = new Set([
 
 const isAgentToolResourceKey = (toolResource) =>
   typeof toolResource === 'string' && AGENT_TOOL_RESOURCE_KEYS.has(toolResource);
+
+const getSGFileEndpoint = (req, endpoint) => {
+  const endpointConfig = getCustomEndpointConfig({ endpoint, appConfig: req.config });
+  if (!isSGFileGatewayEndpoint(endpointConfig)) {
+    return null;
+  }
+  return endpointConfig;
+};
 
 router.get('/', async (req, res) => {
   try {
@@ -252,13 +266,30 @@ router.delete('/', async (req, res) => {
     }
 
     if (dbFiles.length > 0 && nonOwnedFiles.length === 0) {
-      await processDeleteRequest({ req, files: ownedFiles });
-      logger.debug(
-        `[/files] Files deleted successfully: ${ownedFiles
-          .filter((f) => f.file_id)
-          .map((f) => f.file_id)
-          .join(', ')}`,
-      );
+      const localFiles = [];
+      for (const file of ownedFiles) {
+        if (file.source !== FileSources.sg_gateway) {
+          localFiles.push(file);
+          continue;
+        }
+        const endpoint = file.metadata?.sgGateway?.endpoint;
+        const endpointConfig = endpoint ? getSGFileEndpoint(req, endpoint) : null;
+        if (!endpointConfig) {
+          return res.status(409).json({ message: 'SG Gateway file metadata is unavailable' });
+        }
+        await deleteSGGatewayFile({
+          endpointConfig,
+          file,
+          tenantId: req.user.tenantId,
+          userId: req.user.id,
+          allowedAddresses: req.config?.endpoints?.allowedAddresses,
+        });
+        await db.deleteFile(file.file_id);
+      }
+      if (localFiles.length > 0) {
+        await processDeleteRequest({ req, files: localFiles });
+      }
+      logger.debug('[/files] Files deleted successfully', { count: ownedFiles.length });
       res.status(200).json({ message: 'Files deleted successfully' });
       return;
     }
@@ -405,6 +436,26 @@ router.get('/:file_id/preview', fileAccess, async (req, res) => {
      * is N pending polls + 1 ready, so this avoids ~N redundant text
      * reads per file. */
     let file = req.fileAccess.file;
+    if (file.source === FileSources.sg_gateway) {
+      const endpoint = file.metadata?.sgGateway?.endpoint;
+      const endpointConfig = endpoint ? getSGFileEndpoint(req, endpoint) : null;
+      if (!endpointConfig) {
+        return res.status(409).json({ message: 'SG Gateway file metadata is unavailable' });
+      }
+      const status = await getSGGatewayFileStatus({
+        endpointConfig,
+        file,
+        tenantId: req.user.tenantId,
+        userId: req.user.id,
+        allowedAddresses: req.config?.endpoints?.allowedAddresses,
+      });
+      await db.updateFile(status);
+      return res.status(200).json({
+        file_id,
+        status: status.status,
+        previewError: status.previewError,
+      });
+    }
     /* Lazy sweep: if stuck `pending` past the cutoff, mark `failed`
      * conditional on the observed `updatedAt` (concurrent legitimate
      * updates win). */
@@ -442,6 +493,39 @@ router.get('/:file_id/preview', fileAccess, async (req, res) => {
     return res
       .status(500)
       .json({ error: 'Internal Server Error', message: 'Failed to fetch preview status' });
+  }
+});
+
+router.post('/:file_id/retry', fileAccess, async (req, res) => {
+  try {
+    const file = req.fileAccess.file;
+    if (file.source !== FileSources.sg_gateway) {
+      return res.status(409).json({ message: 'File is not managed by SG Gateway' });
+    }
+    const endpoint = file.metadata?.sgGateway?.endpoint;
+    const endpointConfig = endpoint ? getSGFileEndpoint(req, endpoint) : null;
+    if (!endpointConfig) {
+      return res.status(409).json({ message: 'SG Gateway file metadata is unavailable' });
+    }
+    const status = await retrySGGatewayFile({
+      endpointConfig,
+      file,
+      tenantId: req.user.tenantId,
+      userId: req.user.id,
+      allowedAddresses: req.config?.endpoints?.allowedAddresses,
+    });
+    await db.updateFile(status);
+    return res.status(200).json({
+      file_id: req.params.file_id,
+      status: status.status,
+      previewError: status.previewError,
+    });
+  } catch (error) {
+    logger.error('[/files/:file_id/retry] SG Gateway retry failed:', error);
+    return res.status(error.statusCode ?? 500).json({
+      message: 'Failed to retry file processing',
+      code: error.code ?? 'sg_file_retry_failed',
+    });
   }
 });
 
@@ -651,6 +735,33 @@ router.post('/', async (req, res) => {
 
   try {
     filterFile({ req });
+
+    const sgEndpoint = getSGFileEndpoint(req, metadata.endpoint);
+    if (sgEndpoint) {
+      const upload = await uploadSGGatewayFile({
+        endpointConfig: sgEndpoint,
+        file: req.file,
+        tenantId: req.user.tenantId,
+        userId: req.user.id,
+        conversationId: metadata.conversationId,
+        idempotencyKey: metadata.file_id,
+        allowedAddresses: req.config?.endpoints?.allowedAddresses,
+      });
+      let saved;
+      try {
+        saved = await db.createFile(upload);
+      } catch (error) {
+        await deleteSGGatewayFile({
+          endpointConfig: sgEndpoint,
+          file: upload,
+          tenantId: req.user.tenantId,
+          userId: req.user.id,
+          allowedAddresses: req.config?.endpoints?.allowedAddresses,
+        }).catch(() => undefined);
+        throw error;
+      }
+      return res.status(201).json(saved ?? upload);
+    }
 
     metadata.temp_file_id = metadata.file_id;
     metadata.file_id = req.file_id;
