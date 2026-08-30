@@ -18,6 +18,8 @@ const {
   getAgentStartupTelemetry,
   buildAgentContextAttachmentsByAgentId,
   getLazySubagentConfigId,
+  isSGFileGatewayEndpoint,
+  buildSGInternalContext,
 } = require('@librechat/api');
 const {
   Permissions,
@@ -417,6 +419,32 @@ const initializeClient = async ({
    * @type {string[] | undefined}
    */
   const manualSkills = extractManualSkills(req.body);
+  let sgInternal;
+
+  if (requestFiles.length > 0) {
+    const customEndpointConfig = appConfig?.endpoints?.[EModelEndpoint.custom]?.find(
+      (endpointConfig) => endpointConfig.name === primaryAgent.provider,
+    );
+    if (isSGFileGatewayEndpoint(customEndpointConfig)) {
+      const requestedFileIds = requestFiles.flatMap((file) =>
+        typeof file?.file_id === 'string' && file.file_id ? [file.file_id] : [],
+      );
+      const ownerFilter = {
+        file_id: { $in: requestedFileIds },
+        user: req.user.id,
+        ...(req.user.tenantId ? { tenantId: req.user.tenantId } : {}),
+      };
+      const authorizedFiles = (await db.getFiles(ownerFilter)) ?? [];
+      sgInternal = buildSGInternalContext({
+        requestFiles,
+        authorizedFiles,
+        tenantId: req.user.tenantId,
+        userId: req.user.id,
+        messageId: req.body.messageId,
+        endpoint: primaryAgent.provider,
+      });
+    }
+  }
 
   const selectedModelSpec =
     endpointOption.spec && Array.isArray(appConfig?.modelSpecs?.list)
@@ -506,6 +534,15 @@ const initializeClient = async ({
       getSkillByName: skillDbMethods.getSkillByName,
     },
   );
+  if (sgInternal) {
+    primaryConfig.model_parameters = {
+      ...primaryConfig.model_parameters,
+      modelKwargs: {
+        ...primaryConfig.model_parameters?.modelKwargs,
+        sg_internal: sgInternal,
+      },
+    };
+  }
 
   /** Price emitted usage with the primary agent's resolved endpoint config so
    *  custom-endpoint agents reflect configured rates (mirrors the AgentClient

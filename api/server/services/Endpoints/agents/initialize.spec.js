@@ -9,6 +9,7 @@ const {
   MAX_SUBAGENT_RUN_CONFIGS,
   Constants,
   ErrorTypes,
+  FileSources,
 } = require('librechat-data-provider');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 
@@ -203,6 +204,67 @@ describe('initializeClient — processAgent ACL gate', () => {
         jobCreatedAt: 1234,
       }),
     );
+  });
+
+  it('injects trusted SG file metadata from owner-scoped database records', async () => {
+    const fileId = 'file_0123456789abcdef0123456789abcdef';
+    await db.createFile({
+      user: testUser._id,
+      file_id: fileId,
+      bytes: 6,
+      filename: 'policy.txt',
+      filepath: '',
+      object: 'file',
+      type: 'text/plain',
+      source: FileSources.sg_gateway,
+      metadata: {
+        sgGateway: {
+          endpoint: 'SG AI Gateway',
+          jobId: 'job_0123456789abcdef0123456789abcdef',
+          conversationId: 'draft-scope',
+          state: 'READY',
+        },
+      },
+    });
+    mockInitializeAgent.mockResolvedValue(makePrimaryConfig([]));
+    const req = makeReq();
+    req.body.messageId = 'message-a';
+    req.body.files = [{ file_id: fileId }];
+    req.config.endpoints = {
+      custom: [
+        {
+          name: 'SG AI Gateway',
+          apiKey: 'gateway-test-key',
+          baseURL: 'http://gateway.invalid/v1',
+          models: { default: ['default'] },
+          customParams: { defaultParamsEndpoint: 'custom', sgFileGateway: true },
+        },
+      ],
+    };
+    const endpointOption = makeEndpointOption();
+    endpointOption.agent = Promise.resolve({
+      id: PRIMARY_ID,
+      name: 'Primary',
+      provider: 'SG AI Gateway',
+      model: 'default',
+      tools: [],
+    });
+    endpointOption.model_parameters = { model: 'default' };
+
+    await initializeClient({
+      req,
+      res: {},
+      signal: new AbortController().signal,
+      endpointOption,
+    });
+
+    expect(agentClientArgs.agent.model_parameters.modelKwargs.sg_internal).toEqual({
+      tenant_id: expect.stringMatching(/^tenant-/),
+      user_id: testUser._id.toString(),
+      conversation_id: 'draft-scope',
+      message_id: 'message-a',
+      file_ids: [fileId],
+    });
   });
 
   it('propagates an expected-MCP-tools failure from the runtime tool loader', async () => {
