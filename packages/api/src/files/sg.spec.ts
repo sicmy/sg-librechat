@@ -5,6 +5,7 @@ import type { TEndpoint, TFile } from 'librechat-data-provider';
 import {
   SGFileGatewayError,
   buildSGInternalContext,
+  deleteSGGatewayConversation,
   deleteSGGatewayFile,
   getSGGatewayFileStatus,
   retrySGGatewayFile,
@@ -181,6 +182,29 @@ describe('SG file gateway adapter', () => {
     ).resolves.toBeUndefined();
 
     expect(retried.status).toBe('pending');
+  });
+
+  it('deletes an owner-scoped gateway conversation with matching scope headers', async () => {
+    mockAxios.request.mockResolvedValue({ status: 204, data: undefined });
+
+    await deleteSGGatewayConversation({
+      endpointConfig,
+      conversationId: 'conversation-a',
+      tenantId: 'tenant-a',
+      userId: 'user-a',
+    });
+
+    expect(mockAxios.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: 'DELETE',
+        url: 'http://gateway.invalid:4000/internal/conversations/conversation-a',
+        headers: expect.objectContaining({
+          'X-SG-Tenant-ID': 'tenant-a',
+          'X-SG-User-ID': 'user-a',
+          'X-SG-Conversation-ID': 'conversation-a',
+        }),
+      }),
+    );
   });
 
   it('builds trusted chat metadata only from authorized same-scope gateway files', () => {

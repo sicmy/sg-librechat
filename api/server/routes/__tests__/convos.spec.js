@@ -21,9 +21,17 @@ jest.mock('~/server/services/Endpoints/assistants', () => require(MOCKS).assista
 describe('Convos Routes', () => {
   let app;
   let convosRouter;
-  const { deleteToolCalls, deleteConvos, saveConvo } = require('~/models');
+  const {
+    deleteToolCalls,
+    deleteConvos,
+    deleteFile,
+    getFiles,
+    getMessages,
+    saveConvo,
+  } = require('~/models');
   const {
     deleteAgentCheckpoints,
+    deleteSGGatewayConversation,
     deleteAllSharedLinksWithCleanup,
     deleteConvoSharedLinksWithCleanup,
   } = require('@librechat/api');
@@ -45,6 +53,8 @@ describe('Convos Routes', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    getMessages.mockResolvedValue([]);
+    getFiles.mockResolvedValue([]);
   });
 
   describe('DELETE /all', () => {
@@ -271,6 +281,71 @@ describe('Convos Routes', () => {
         'test-user-123',
         mockConversationId,
       );
+    });
+
+    it('deletes each SG Gateway conversation scope before deleting the conversation', async () => {
+      const mockConversationId = 'conv-sg-files';
+      const executionOrder = [];
+      getMessages.mockResolvedValue([
+        {
+          files: [{ file_id: 'file_one' }, { file_id: 'file_two' }],
+        },
+      ]);
+      getFiles.mockResolvedValue([
+        {
+          file_id: 'file_one',
+          metadata: {
+            sgGateway: {
+              endpoint: 'SG AI Gateway',
+              conversationId: mockConversationId,
+            },
+          },
+        },
+        {
+          file_id: 'file_two',
+          metadata: {
+            sgGateway: {
+              endpoint: 'SG AI Gateway',
+              conversationId: mockConversationId,
+            },
+          },
+        },
+      ]);
+      deleteSGGatewayConversation.mockImplementation(() => {
+        executionOrder.push('deleteSGGatewayConversation');
+        return Promise.resolve();
+      });
+      deleteConvos.mockImplementation(() => {
+        executionOrder.push('deleteConvos');
+        return Promise.resolve({ deletedCount: 1 });
+      });
+      deleteToolCalls.mockResolvedValue({ deletedCount: 0 });
+      deleteConvoSharedLinksWithCleanup.mockResolvedValue({ deletedCount: 0 });
+
+      const response = await request(app)
+        .delete('/api/convos')
+        .send({ arg: { conversationId: mockConversationId } });
+
+      expect(response.status).toBe(201);
+      expect(getMessages).toHaveBeenCalledWith(
+        { user: 'test-user-123', conversationId: mockConversationId },
+        'files',
+        { sort: false },
+      );
+      expect(getFiles).toHaveBeenCalledWith({
+        user: 'test-user-123',
+        source: 'sg_gateway',
+        file_id: { $in: ['file_one', 'file_two'] },
+      });
+      expect(deleteSGGatewayConversation).toHaveBeenCalledTimes(1);
+      expect(deleteSGGatewayConversation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          conversationId: mockConversationId,
+          userId: 'test-user-123',
+        }),
+      );
+      expect(deleteFile).toHaveBeenCalledTimes(2);
+      expect(executionOrder).toEqual(['deleteSGGatewayConversation', 'deleteConvos']);
     });
 
     it('should not call deleteConvoSharedLinksWithCleanup when no conversationId provided', async () => {

@@ -26,7 +26,7 @@ function SGFileContainer({
 }: {
   file: ExtendedFile;
   setFiles: React.Dispatch<React.SetStateAction<Map<string, ExtendedFile>>>;
-  onDelete: () => void;
+  onDelete: (status?: ExtendedFile['status']) => void;
 }) {
   const localize = useLocalize();
   const baseStatus = file.status ?? 'pending';
@@ -43,7 +43,8 @@ function SGFileContainer({
       if (
         !existing ||
         (existing.status === statusQuery.data?.status &&
-          existing.previewError === statusQuery.data?.previewError)
+          existing.previewError === statusQuery.data?.previewError &&
+          existing.progress === 1)
       ) {
         return current;
       }
@@ -112,7 +113,7 @@ function SGFileContainer({
       file={file}
       subtitle={subtitle}
       onClick={status === 'failed' ? retry : undefined}
-      onDelete={onDelete}
+      onDelete={() => onDelete(status)}
     />
   );
 }
@@ -217,20 +218,24 @@ export default function FileRow({
             { map: new Map(), uniqueFiles: [] as ExtendedFile[] },
           )
           .uniqueFiles.map((file: ExtendedFile) => {
-            const handleDelete = () => {
-              if (abortUpload && file.progress < 1) {
+            const isSGFile = file.source === FileSources.sg_gateway;
+            const handleDelete = (sgStatus?: ExtendedFile['status']) => {
+              const fileToDelete =
+                isSGFile && sgStatus && sgStatus !== 'pending'
+                  ? { ...file, status: sgStatus, progress: 1 }
+                  : file;
+              if (abortUpload && fileToDelete.progress < 1) {
                 abortUpload();
               }
-              if (file.progress >= 1 && !file.attached) {
+              if (fileToDelete.progress >= 1 && !fileToDelete.attached) {
                 showToast({
                   message: localize('com_ui_deleting_file'),
                   status: 'info',
                 });
               }
-              deleteFile({ file, setFiles });
+              deleteFile({ file: fileToDelete, setFiles });
             };
             const isImage = file.type?.startsWith('image') ?? false;
-            const isSGFile = file.source === FileSources.sg_gateway;
             let content: React.ReactNode;
             if (isSGFile) {
               content = <SGFileContainer file={file} setFiles={setFiles} onDelete={handleDelete} />;

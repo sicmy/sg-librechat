@@ -3,6 +3,9 @@ const express = require('express');
 const { sleep } = require('@librechat/agents');
 const {
   isEnabled,
+  getCustomEndpointConfig,
+  isSGFileGatewayEndpoint,
+  deleteSGGatewayConversation,
   deleteAgentCheckpoints,
   resolveImportMaxFileSize,
   restoreTenantContextFromReq,
@@ -10,7 +13,12 @@ const {
   deleteConvoSharedLinksWithCleanup,
 } = require('@librechat/api');
 const { logger } = require('@librechat/data-schemas');
-const { CacheKeys, EModelEndpoint } = require('librechat-data-provider');
+const {
+  CacheKeys,
+  FileSources,
+  EModelEndpoint,
+  extractEnvVariable,
+} = require('librechat-data-provider');
 const {
   createImportLimiters,
   validateConvoAccess,
@@ -34,6 +42,64 @@ router.use(requireJwtAuth);
 
 const isValidProjectFilter = (projectId) =>
   !projectId || projectId === 'unassigned' || /^[a-f\d]{24}$/i.test(projectId);
+
+const deleteSGConversationFiles = async (req, conversationId) => {
+  const messages = await db.getMessages({ user: req.user.id, conversationId }, 'files', {
+    sort: false,
+  });
+  const fileIds = [
+    ...new Set(
+      (messages ?? []).flatMap((message) =>
+        Array.isArray(message.files)
+          ? message.files.flatMap((file) => (file?.file_id ? [file.file_id] : []))
+          : [],
+      ),
+    ),
+  ];
+  if (fileIds.length === 0) {
+    return;
+  }
+  const files =
+    (await db.getFiles({
+      user: req.user.id,
+      source: FileSources.sg_gateway,
+      file_id: { $in: fileIds },
+    })) ?? [];
+  const scopes = new Map();
+  for (const file of files) {
+    const gateway = file.metadata?.sgGateway;
+    if (!gateway?.endpoint || !gateway.conversationId) {
+      continue;
+    }
+    const key = JSON.stringify([gateway.endpoint, gateway.conversationId]);
+    if (!scopes.has(key)) {
+      scopes.set(key, gateway);
+    }
+  }
+
+  for (const gateway of scopes.values()) {
+    const endpointConfig = getCustomEndpointConfig({
+      endpoint: gateway.endpoint,
+      appConfig: req.config,
+    });
+    if (!isSGFileGatewayEndpoint(endpointConfig)) {
+      throw new Error('SG Gateway conversation metadata is unavailable');
+    }
+    await deleteSGGatewayConversation({
+      endpointConfig: {
+        ...endpointConfig,
+        apiKey: extractEnvVariable(endpointConfig.apiKey),
+        baseURL: extractEnvVariable(endpointConfig.baseURL),
+      },
+      conversationId: gateway.conversationId,
+      tenantId: req.user.tenantId,
+      userId: req.user.id,
+      allowedAddresses: req.config?.endpoints?.allowedAddresses,
+    });
+  }
+
+  await Promise.all(files.map((file) => db.deleteFile(file.file_id)));
+};
 
 router.get('/', async (req, res) => {
   const limit = parseInt(req.query.limit, 10) || 25;
@@ -145,6 +211,9 @@ router.delete('/', configMiddleware, async (req, res) => {
   }
 
   try {
+    if (filter.conversationId) {
+      await deleteSGConversationFiles(req, filter.conversationId);
+    }
     const dbResponse = await db.deleteConvos(req.user.id, filter);
     // HITL: prune the deleted conversations' durable checkpoints — a paused run's
     // checkpoint would otherwise persist until the Mongo TTL. Never throws.

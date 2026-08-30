@@ -43,18 +43,24 @@ jest.mock('../Image', () => {
 });
 
 jest.mock('../FileContainer', () => {
-  return function MockFileContainer({ file, subtitle, onClick }: any) {
+  return function MockFileContainer({ file, subtitle, onClick, onDelete }: any) {
     return (
-      <button type="button" data-testid="mock-file-container" onClick={onClick}>
-        <span data-testid="file-name">{file.filename}</span>
-        <span data-testid="file-subtitle">{subtitle}</span>
-      </button>
+      <div>
+        <button type="button" data-testid="mock-file-container" onClick={onClick}>
+          <span data-testid="file-name">{file.filename}</span>
+          <span data-testid="file-subtitle">{subtitle}</span>
+        </button>
+        <button type="button" data-testid="mock-file-delete" onClick={onDelete}>
+          {file.filename}
+        </button>
+      </div>
     );
   };
 });
 
 const mockUseLocalize = jest.requireMock('~/hooks').useLocalize;
 const mockUseDeleteFilesMutation = jest.requireMock('~/data-provider').useDeleteFilesMutation;
+const mockUseFilePreview = jest.requireMock('~/data-provider').useFilePreview;
 const mockUseRetrySGFileMutation = jest.requireMock('~/data-provider').useRetrySGFileMutation;
 const mockUseFileDeletion = jest.requireMock('~/hooks/Files').useFileDeletion;
 
@@ -79,6 +85,7 @@ describe('FileRow', () => {
     mockUseDeleteFilesMutation.mockReturnValue({
       mutateAsync: jest.fn(),
     });
+    mockUseFilePreview.mockReturnValue({ data: undefined });
     mockUseRetrySGFileMutation.mockReturnValue({
       isLoading: false,
       mutate: jest.fn(),
@@ -239,6 +246,43 @@ describe('FileRow', () => {
       fireEvent.click(screen.getByTestId('mock-file-container'));
 
       expect(mutate).toHaveBeenCalledWith(file.file_id, expect.any(Object));
+    });
+
+    it('finishes progress when a ready SG file already has the terminal status', () => {
+      const file = createMockFile({
+        source: FileSources.sg_gateway,
+        status: 'ready',
+        progress: 0.9,
+      });
+      mockUseFilePreview.mockReturnValue({
+        data: { file_id: file.file_id, status: 'ready' },
+      });
+
+      renderFileRow(new Map([[file.file_id, file]]));
+
+      const update = mockSetFiles.mock.calls.find(([value]) => typeof value === 'function')?.[0];
+      expect(update).toEqual(expect.any(Function));
+      const updated = update(new Map([[file.file_id, file]]));
+      expect(updated.get(file.file_id)).toMatchObject({ status: 'ready', progress: 1 });
+    });
+
+    it('deletes a terminal SG file with completed progress during a stale attachment render', () => {
+      const file = createMockFile({
+        source: FileSources.sg_gateway,
+        status: 'pending',
+        progress: 0.9,
+      });
+      mockUseFilePreview.mockReturnValue({
+        data: { file_id: file.file_id, status: 'ready' },
+      });
+
+      renderFileRow(new Map([[file.file_id, file]]));
+      fireEvent.click(screen.getByTestId('mock-file-delete'));
+
+      expect(mockDeleteFile).toHaveBeenCalledWith({
+        file: expect.objectContaining({ status: 'ready', progress: 1 }),
+        setFiles: mockSetFiles,
+      });
     });
 
     it('should pass local source to Image component', () => {

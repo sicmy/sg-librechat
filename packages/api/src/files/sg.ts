@@ -290,6 +290,34 @@ export async function deleteSGGatewayFile({
   }
 }
 
+export async function deleteSGGatewayConversation({
+  endpointConfig,
+  conversationId,
+  tenantId,
+  userId,
+  allowedAddresses,
+}: {
+  endpointConfig: SGEndpointConfig;
+  conversationId: string;
+  tenantId?: string | null;
+  userId: string;
+  allowedAddresses?: string[] | null;
+}): Promise<void> {
+  const url = getGatewayURL(
+    endpointConfig.baseURL,
+    `/internal/conversations/${encodeURIComponent(conversationId)}`,
+  );
+  await requestGateway<undefined>({
+    method: 'DELETE',
+    url,
+    endpointConfig,
+    tenantId,
+    userId,
+    conversationId,
+    allowedAddresses,
+  });
+}
+
 export function buildSGInternalContext({
   requestFiles,
   authorizedFiles,

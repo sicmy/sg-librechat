@@ -15,6 +15,14 @@ module.exports = {
     deleteConvoSharedLinksWithCleanup: jest.fn(),
     deleteAllSharedLinksWithCleanup: jest.fn(),
     deleteAgentCheckpoints: jest.fn(),
+    getCustomEndpointConfig: jest.fn(({ endpoint }) => ({
+      name: endpoint,
+      apiKey: 'test-gateway-key',
+      baseURL: 'http://gateway.test/v1',
+      customParams: { sgFileGateway: true },
+    })),
+    isSGFileGatewayEndpoint: jest.fn(() => true),
+    deleteSGGatewayConversation: jest.fn(),
     ...overrides,
   }),
 
@@ -36,9 +44,12 @@ module.exports = {
   dataProvider: (overrides = {}) => ({
     CacheKeys: { GEN_TITLE: 'GEN_TITLE' },
     EModelEndpoint: {
+      custom: 'custom',
       azureAssistants: 'azureAssistants',
       assistants: 'assistants',
     },
+    FileSources: { sg_gateway: 'sg_gateway' },
+    extractEnvVariable: jest.fn((value) => value),
     ...overrides,
   }),
 
@@ -59,6 +70,9 @@ module.exports = {
     deleteAllSharedLinks: jest.fn(),
     deleteConvoSharedLink: jest.fn(),
     deleteToolCalls: jest.fn(),
+    getMessages: jest.fn().mockResolvedValue([]),
+    getFiles: jest.fn().mockResolvedValue([]),
+    deleteFile: jest.fn(),
   }),
 
   requireJwtAuth: () => (req, res, next) => next(),

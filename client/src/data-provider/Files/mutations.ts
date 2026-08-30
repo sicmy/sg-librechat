@@ -148,8 +148,18 @@ export const useRetrySGFileMutation = (): UseMutationResult<
   string,
   unknown
 > => {
+  const queryClient = useQueryClient();
   return useMutation([MutationKeys.sgFileRetry], {
     mutationFn: (fileId: string) => dataService.retryFileProcessing(fileId),
+    onSuccess: (data, fileId) => {
+      /**
+       * The failed preview query is still actively observed by FileRow, so
+       * removeQueries does not evict it. Seed the retry response instead: the
+       * per-call callback then flips the attachment itself to `pending`, which
+       * re-enables polling without the stale `failed` payload winning a render.
+       */
+      queryClient.setQueryData([QueryKeys.filePreview, fileId], data);
+    },
   });
 };
 

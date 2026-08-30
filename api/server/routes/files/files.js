@@ -26,6 +26,7 @@ const {
   EModelEndpoint,
   EToolResources,
   PermissionBits,
+  extractEnvVariable,
   checkOpenAIStorage,
   isAssistantsEndpoint,
 } = require('librechat-data-provider');
@@ -62,7 +63,11 @@ const getSGFileEndpoint = (req, endpoint) => {
   if (!isSGFileGatewayEndpoint(endpointConfig)) {
     return null;
   }
-  return endpointConfig;
+  return {
+    ...endpointConfig,
+    apiKey: extractEnvVariable(endpointConfig.apiKey),
+    baseURL: extractEnvVariable(endpointConfig.baseURL),
+  };
 };
 
 router.get('/', async (req, res) => {
@@ -189,8 +194,12 @@ router.delete('/', async (req, res) => {
       if (!file.file_id) {
         return false;
       }
-      if (!file.filepath) {
+      if (!file.filepath && file.source !== FileSources.sg_gateway) {
         return false;
+      }
+
+      if (file.source === FileSources.sg_gateway) {
+        return /^file_[A-Za-z0-9_-]{1,128}$/.test(file.file_id);
       }
 
       if (/^(file|assistant)-/.test(file.file_id)) {

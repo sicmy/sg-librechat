@@ -45,6 +45,7 @@ jest.mock('sharp', () =>
 jest.mock('@librechat/api', () => ({
   ...jest.requireActual('@librechat/api'),
   refreshS3FileUrls: jest.fn(),
+  deleteSGGatewayFile: jest.fn().mockResolvedValue(),
 }));
 
 jest.mock('~/cache', () => ({
@@ -64,6 +65,7 @@ jest.mock('~/config', () => ({
 
 const { processDeleteRequest } = require('~/server/services/Files/process');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
+const { deleteSGGatewayFile } = require('@librechat/api');
 
 // Import the router after mocks
 const router = require('./files');
@@ -117,6 +119,18 @@ describe('File Routes - Delete with Agent Access', () => {
         role: SystemRoles.USER,
       };
       req.app.locals = {};
+      req.config = {
+        endpoints: {
+          custom: [
+            {
+              name: 'SG AI Gateway',
+              apiKey: 'test-gateway-key',
+              baseURL: 'http://gateway.test/v1',
+              customParams: { sgFileGateway: true },
+            },
+          ],
+        },
+      };
       next();
     });
 
@@ -207,6 +221,45 @@ describe('File Routes - Delete with Agent Access', () => {
       expect(response.status).toBe(200);
       expect(response.body.message).toBe('Files deleted successfully');
       expect(processDeleteRequest).toHaveBeenCalled();
+    });
+
+    it('deletes an owned SG Gateway file without requiring a local filepath', async () => {
+      const sgFileId = `file_${uuidv4().replaceAll('-', '')}`;
+      await createFile({
+        user: otherUserId,
+        file_id: sgFileId,
+        filename: 'gateway-file.txt',
+        filepath: '',
+        bytes: 200,
+        type: 'text/plain',
+        source: FileSources.sg_gateway,
+        metadata: {
+          sgGateway: {
+            endpoint: 'SG AI Gateway',
+            jobId: 'job-delete-test',
+            conversationId: 'conversation-delete-test',
+            state: 'ready',
+            retryable: false,
+            errorCode: null,
+          },
+        },
+      });
+
+      const response = await request(app)
+        .delete('/files')
+        .send({
+          files: [{ file_id: sgFileId, filepath: '', source: FileSources.sg_gateway }],
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body.message).toBe('Files deleted successfully');
+      expect(deleteSGGatewayFile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: otherUserId.toString(),
+          file: expect.objectContaining({ file_id: sgFileId }),
+        }),
+      );
+      await expect(File.exists({ file_id: sgFileId })).resolves.toBeNull();
     });
 
     it('should prevent deleting files not owned by user without agent context', async () => {
