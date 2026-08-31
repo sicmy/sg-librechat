@@ -782,6 +782,13 @@ export const getFileDownload = async (userId: string, file_id: string): Promise<
   });
 };
 
+export const getAuthenticatedImage = async (url: string): Promise<AxiosResponse> => {
+  return request.getResponse(url, {
+    responseType: 'blob',
+    headers: { Accept: 'image/*' },
+  });
+};
+
 export const getFileDownloadURL = async (
   userId: string,
   file_id: string,

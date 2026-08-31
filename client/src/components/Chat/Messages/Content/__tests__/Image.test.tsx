@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import Image, { _resetImageCaches } from '../Image';
 
 jest.mock('~/utils', () => ({
@@ -10,8 +10,12 @@ jest.mock('~/utils', () => ({
       .join(' '),
 }));
 
+const mockGetAuthenticatedImage = jest.fn();
 jest.mock('librechat-data-provider', () => ({
   apiBaseUrl: () => '',
+  dataService: {
+    getAuthenticatedImage: (...args: unknown[]) => mockGetAuthenticatedImage(...args),
+  },
 }));
 
 jest.mock('@librechat/client', () => ({
@@ -35,6 +39,46 @@ describe('Image', () => {
   beforeEach(() => {
     _resetImageCaches();
     jest.clearAllMocks();
+  });
+
+  it('loads SG proxy images through an authenticated blob request', async () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    const createObjectURL = jest.fn(() => 'blob:sg-image');
+    const revokeObjectURL = jest.fn();
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL });
+    mockGetAuthenticatedImage.mockResolvedValue({ data: new Blob(['png']) });
+    const { unmount } = render(
+      <Image
+        imagePath="/api/files/sg-image/file_image"
+        altText="Gateway image"
+        width={640}
+        height={480}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByRole('img')).toHaveAttribute('src', 'blob:sg-image'));
+    expect(mockGetAuthenticatedImage).toHaveBeenCalledWith('/api/files/sg-image/file_image');
+
+    unmount();
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:sg-image');
+    if (originalCreateObjectURL) {
+      Object.defineProperty(URL, 'createObjectURL', {
+        configurable: true,
+        value: originalCreateObjectURL,
+      });
+    } else {
+      Reflect.deleteProperty(URL, 'createObjectURL');
+    }
+    if (originalRevokeObjectURL) {
+      Object.defineProperty(URL, 'revokeObjectURL', {
+        configurable: true,
+        value: originalRevokeObjectURL,
+      });
+    } else {
+      Reflect.deleteProperty(URL, 'revokeObjectURL');
+    }
   });
 
   describe('rendering without dimensions', () => {

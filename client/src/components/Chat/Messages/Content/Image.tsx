@@ -1,6 +1,6 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { Skeleton } from '@librechat/client';
-import { apiBaseUrl } from 'librechat-data-provider';
+import { apiBaseUrl, dataService } from 'librechat-data-provider';
 import DialogImage from './DialogImage';
 import { cn } from '~/utils';
 
@@ -46,6 +46,7 @@ const Image = ({
   height?: number;
 }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [authenticatedImageUrl, setAuthenticatedImageUrl] = useState('');
   const triggerRef = useRef<HTMLButtonElement>(null);
 
   const absoluteImageUrl = useMemo(() => {
@@ -64,9 +65,42 @@ const Image = ({
     return imagePath;
   }, [imagePath]);
 
+  const needsAuthenticatedFetch = imagePath.startsWith('/api/files/sg-image/');
+
+  useEffect(() => {
+    if (!needsAuthenticatedFetch || !absoluteImageUrl) {
+      setAuthenticatedImageUrl('');
+      return;
+    }
+    let active = true;
+    let objectUrl = '';
+    dataService
+      .getAuthenticatedImage(absoluteImageUrl)
+      .then((response) => {
+        objectUrl = window.URL.createObjectURL(response.data);
+        if (active) {
+          setAuthenticatedImageUrl(objectUrl);
+          return;
+        }
+        window.URL.revokeObjectURL(objectUrl);
+      })
+      .catch((error) => console.error('Authenticated image load failed:', error));
+    return () => {
+      active = false;
+      if (objectUrl) {
+        window.URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [absoluteImageUrl, needsAuthenticatedFetch]);
+
+  const displayImageUrl = needsAuthenticatedFetch ? authenticatedImageUrl : absoluteImageUrl;
+
   const downloadImage = async () => {
+    if (!displayImageUrl) {
+      return;
+    }
     try {
-      const response = await fetch(absoluteImageUrl);
+      const response = await fetch(displayImageUrl);
       if (!response.ok) {
         throw new Error(`Failed to fetch image: ${response.status}`);
       }
@@ -85,7 +119,7 @@ const Image = ({
     } catch (error) {
       console.error('Download failed:', error);
       const link = document.createElement('a');
-      link.href = absoluteImageUrl;
+      link.href = displayImageUrl;
       link.download = altText || 'image.png';
       document.body.appendChild(link);
       link.click();
@@ -94,15 +128,17 @@ const Image = ({
   };
 
   useEffect(() => {
-    if (width && height && absoluteImageUrl) {
-      dimensionCache.set(absoluteImageUrl, { width, height });
+    if (width && height && displayImageUrl) {
+      dimensionCache.set(displayImageUrl, { width, height });
     }
-  }, [absoluteImageUrl, width, height]);
+  }, [displayImageUrl, width, height]);
 
-  const dims = width && height ? { width, height } : dimensionCache.get(absoluteImageUrl);
+  const dims = width && height ? { width, height } : dimensionCache.get(displayImageUrl);
   const hasDimensions = !!(dims?.width && dims?.height);
   const heightStyle = hasDimensions ? computeHeightStyle(dims.width, dims.height) : undefined;
-  const showSkeleton = hasDimensions && !paintedUrls.has(absoluteImageUrl);
+  const showSkeleton =
+    (needsAuthenticatedFetch && !displayImageUrl) ||
+    (hasDimensions && !paintedUrls.has(displayImageUrl));
 
   return (
     <div>
@@ -111,6 +147,7 @@ const Image = ({
         type="button"
         aria-label={`View ${altText} in dialog`}
         aria-haspopup="dialog"
+        disabled={!displayImageUrl}
         onClick={() => setIsOpen(true)}
         className={cn(
           'relative mt-1 w-full max-w-lg cursor-pointer overflow-hidden rounded-lg border border-border-light text-text-secondary-alt shadow-md transition-shadow',
@@ -120,22 +157,24 @@ const Image = ({
         style={heightStyle}
       >
         {showSkeleton && <Skeleton className="absolute inset-0" aria-hidden="true" />}
-        <img
-          alt={altText}
-          src={absoluteImageUrl}
-          onLoad={() => paintedUrls.add(absoluteImageUrl)}
-          className={cn(
-            'relative block text-transparent',
-            hasDimensions
-              ? 'size-full object-contain'
-              : cn('h-auto w-auto max-w-full', IMAGE_MAX_H),
-          )}
-        />
+        {displayImageUrl && (
+          <img
+            alt={altText}
+            src={displayImageUrl}
+            onLoad={() => paintedUrls.add(displayImageUrl)}
+            className={cn(
+              'relative block text-transparent',
+              hasDimensions
+                ? 'size-full object-contain'
+                : cn('h-auto w-auto max-w-full', IMAGE_MAX_H),
+            )}
+          />
+        )}
       </button>
       <DialogImage
         isOpen={isOpen}
         onOpenChange={setIsOpen}
-        src={absoluteImageUrl}
+        src={displayImageUrl}
         downloadImage={downloadImage}
         args={args}
         triggerRef={triggerRef}
