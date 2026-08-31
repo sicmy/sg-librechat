@@ -46,6 +46,8 @@ jest.mock('@librechat/api', () => ({
   ...jest.requireActual('@librechat/api'),
   refreshS3FileUrls: jest.fn(),
   deleteSGGatewayFile: jest.fn().mockResolvedValue(),
+  getSGGatewayImage: jest.fn(),
+  getSGGatewayFilePath: jest.requireActual('@librechat/api').getSGGatewayFilePath,
 }));
 
 jest.mock('~/cache', () => ({
@@ -65,7 +67,7 @@ jest.mock('~/config', () => ({
 
 const { processDeleteRequest } = require('~/server/services/Files/process');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
-const { deleteSGGatewayFile } = require('@librechat/api');
+const { deleteSGGatewayFile, getSGGatewayImage } = require('@librechat/api');
 
 // Import the router after mocks
 const router = require('./files');
@@ -191,6 +193,66 @@ describe('File Routes - Delete with Agent Access', () => {
       filepath: '/uploads/test.txt',
       bytes: 100,
       type: 'text/plain',
+    });
+  });
+
+  describe('GET /files/sg-image/:file_id', () => {
+    it('proxies an owned SG image with private no-store headers', async () => {
+      const sgFileId = `file_${uuidv4().replaceAll('-', '')}`;
+      await createFile({
+        user: otherUserId,
+        file_id: sgFileId,
+        filename: 'document.png',
+        filepath: `/api/files/sg-image/${sgFileId}`,
+        bytes: 200,
+        type: 'image/png',
+        source: FileSources.sg_gateway,
+        metadata: {
+          sgGateway: {
+            endpoint: 'SG AI Gateway',
+            jobId: 'job-image-test',
+            conversationId: 'conversation-image-test',
+            state: 'READY',
+          },
+        },
+      });
+      const content = Buffer.from('normalized-png');
+      getSGGatewayImage.mockResolvedValue(content);
+
+      const response = await request(app).get(`/files/sg-image/${sgFileId}`);
+
+      expect(response.status).toBe(200);
+      expect(response.headers['content-type']).toMatch(/^image\/png/);
+      expect(response.headers['cache-control']).toBe('private, no-store');
+      expect(response.body).toEqual(content);
+      expect(getSGGatewayImage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: otherUserId.toString(),
+          file: expect.objectContaining({ file_id: sgFileId }),
+        }),
+      );
+    });
+  });
+
+  describe('GET /files', () => {
+    it('derives proxy paths for existing SG images with empty filepath', async () => {
+      const sgFileId = `file_${uuidv4().replaceAll('-', '')}`;
+      await createFile({
+        user: otherUserId,
+        file_id: sgFileId,
+        filename: 'legacy-document.png',
+        filepath: '',
+        bytes: 200,
+        type: 'image/png',
+        source: FileSources.sg_gateway,
+      });
+
+      const response = await request(app).get('/files');
+
+      expect(response.status).toBe(200);
+      expect(response.body.find((file) => file.file_id === sgFileId)?.filepath).toBe(
+        `/api/files/sg-image/${sgFileId}`,
+      );
     });
   });
 

@@ -80,6 +80,12 @@ export function toSGScopeToken(value: string | null | undefined, prefix: string)
   return `${prefix}-${digest}`;
 }
 
+export function getSGGatewayFilePath(fileId: string, mimeType: string | undefined): string {
+  return mimeType?.startsWith('image/') === true
+    ? `/api/files/sg-image/${encodeURIComponent(fileId)}`
+    : '';
+}
+
 export async function uploadSGGatewayFile({
   endpointConfig,
   file,
@@ -145,7 +151,7 @@ export async function uploadSGGatewayFile({
       bytes: upload.size_bytes,
       embedded: false,
       filename: upload.display_name,
-      filepath: '',
+      filepath: getSGGatewayFilePath(upload.file_id, upload.mime_type),
       object: 'file',
       type: upload.mime_type,
       usage: 0,
@@ -162,6 +168,39 @@ export async function uploadSGGatewayFile({
   } finally {
     fileStream.destroy();
   }
+}
+
+export async function getSGGatewayImage({
+  endpointConfig,
+  file,
+  tenantId,
+  userId,
+  allowedAddresses,
+}: {
+  endpointConfig: SGEndpointConfig;
+  file: Pick<TFile, 'file_id' | 'type' | 'metadata'>;
+  tenantId?: string | null;
+  userId: string;
+  allowedAddresses?: string[] | null;
+}): Promise<Buffer> {
+  if (!file.type?.startsWith('image/')) {
+    throw new SGFileGatewayError(404, 'resource_not_found');
+  }
+  const gateway = requireGatewayMetadata(file);
+  const url = getGatewayURL(
+    endpointConfig.baseURL,
+    `/internal/files/${encodeURIComponent(file.file_id)}/image`,
+  );
+  return requestGateway<Buffer>({
+    method: 'GET',
+    url,
+    endpointConfig,
+    tenantId,
+    userId,
+    conversationId: gateway.conversationId,
+    allowedAddresses,
+    responseType: 'arraybuffer',
+  });
 }
 
 export async function getSGGatewayFileStatus({
@@ -442,6 +481,7 @@ async function requestGateway<T>({
   userId,
   conversationId,
   allowedAddresses,
+  responseType,
 }: {
   method: 'GET' | 'POST' | 'DELETE';
   url: string;
@@ -450,6 +490,7 @@ async function requestGateway<T>({
   userId: string;
   conversationId: string;
   allowedAddresses?: string[] | null;
+  responseType?: AxiosRequestConfig['responseType'];
 }): Promise<T> {
   const config: AxiosRequestConfig = {
     method,
@@ -461,6 +502,7 @@ async function requestGateway<T>({
       'X-SG-Conversation-ID': requireScopeToken(conversationId, 'conversation_id'),
     },
     timeout: REQUEST_TIMEOUT_MS,
+    ...(responseType ? { responseType } : {}),
     validateStatus: () => true,
   };
   applyAxiosProxyConfig(config, url);

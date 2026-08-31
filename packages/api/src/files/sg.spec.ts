@@ -7,6 +7,7 @@ import {
   buildSGInternalContext,
   deleteSGGatewayConversation,
   deleteSGGatewayFile,
+  getSGGatewayImage,
   getSGGatewayFileStatus,
   retrySGGatewayFile,
   toSGScopeToken,
@@ -137,6 +138,49 @@ describe('SG file gateway adapter', () => {
 
     expect(result.status).toBe('ready');
     expect(result.metadata?.sgGateway?.state).toBe('READY');
+  });
+
+  it('maps image uploads to the authenticated LibreChat proxy and fetches normalized PNG', async () => {
+    const fileId = 'file_0123456789abcdef0123456789abcdef';
+    mockAxios.post.mockResolvedValue({
+      status: 201,
+      data: {
+        file_id: fileId,
+        job_id: 'job_0123456789abcdef0123456789abcdef',
+        display_name: 'document.png',
+        mime_type: 'image/png',
+        size_bytes: 100,
+        sha256: 'digest',
+        state: 'READY',
+        created_at: '2026-08-31T00:00:00+00:00',
+      },
+    });
+    const uploaded = await uploadSGGatewayFile({
+      endpointConfig,
+      file: { ...uploadFile, originalname: 'document.png', mimetype: 'image/png' },
+      userId: 'user-a',
+      conversationId: 'conversation-a',
+      idempotencyKey: 'upload-image',
+    });
+    expect(uploaded.filepath).toBe(`/api/files/sg-image/${fileId}`);
+
+    const content = Buffer.from('normalized-png');
+    mockAxios.request.mockResolvedValue({ status: 200, data: content });
+
+    await expect(
+      getSGGatewayImage({
+        endpointConfig,
+        file: uploaded,
+        userId: 'user-a',
+      }),
+    ).resolves.toEqual(content);
+    expect(mockAxios.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: 'GET',
+        url: `http://gateway.invalid:4000/internal/files/${fileId}/image`,
+        responseType: 'arraybuffer',
+      }),
+    );
   });
 
   it('maps retry back to pending and treats an already-deleted file as success', async () => {

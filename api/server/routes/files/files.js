@@ -13,6 +13,8 @@ const {
   getCustomEndpointConfig,
   isSGFileGatewayEndpoint,
   uploadSGGatewayFile,
+  getSGGatewayFilePath,
+  getSGGatewayImage,
   getSGGatewayFileStatus,
   retrySGGatewayFile,
   deleteSGGatewayFile,
@@ -86,7 +88,18 @@ router.get('/', async (req, res) => {
         logger.warn('[/files] Error refreshing S3 file URLs:', error);
       }
     }
-    res.status(200).send(files);
+    const clientFiles = files.map((file) => {
+      if (file.filepath || file.source !== FileSources.sg_gateway) {
+        return file;
+      }
+      const filepath = getSGGatewayFilePath(file.file_id, file.type);
+      if (!filepath) {
+        return file;
+      }
+      const rawFile = typeof file.toObject === 'function' ? file.toObject() : file;
+      return { ...rawFile, filepath };
+    });
+    res.status(200).send(clientFiles);
   } catch (error) {
     logger.error('[/files] Error getting files:', error);
     res.status(400).json({ message: 'Error in request', error: error.message });
@@ -599,6 +612,35 @@ const getDownloadFileMetadata = (file) => {
     return metadata;
   }, {});
 };
+
+router.get('/sg-image/:file_id', fileAccess, async (req, res) => {
+  try {
+    const file = req.fileAccess.file;
+    if (file.source !== FileSources.sg_gateway || !file.type?.startsWith('image/')) {
+      return res.status(404).json({ message: 'Image not found' });
+    }
+    const endpoint = file.metadata?.sgGateway?.endpoint;
+    const endpointConfig = endpoint ? getSGFileEndpoint(req, endpoint) : null;
+    if (!endpointConfig) {
+      return res.status(409).json({ message: 'SG Gateway file metadata is unavailable' });
+    }
+    const content = await getSGGatewayImage({
+      endpointConfig,
+      file,
+      tenantId: req.user.tenantId,
+      userId: req.user.id,
+      allowedAddresses: req.config?.endpoints?.allowedAddresses,
+    });
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    return res.status(200).send(content);
+  } catch (error) {
+    logger.error('[SG IMAGE ROUTE] Failed to render Gateway image:', error);
+    const status = Number.isInteger(error?.statusCode) ? error.statusCode : 502;
+    return res.status(status).json({ message: 'Gateway image is unavailable' });
+  }
+});
 
 router.get('/download-url/:userId/:file_id', fileAccess, async (req, res) => {
   try {
