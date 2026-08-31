@@ -1,7 +1,7 @@
 import React from 'react';
 import '@testing-library/jest-dom';
 import { render, screen } from 'test/layout-test-utils';
-import ChatView from '../ChatView';
+import ChatView, { isComposerResetSubmission } from '../ChatView';
 
 const mockParams = jest.fn();
 const mockConversation = jest.fn();
@@ -108,5 +108,13 @@ describe('ChatView page heading', () => {
     expect(
       screen.queryByRole('heading', { level: 1, name: 'Previous chat' }),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe('ChatView composer reset signal', () => {
+  test('resets only for the empty submission emitted by newConversation', () => {
+    expect(isComposerResetSubmission({} as never)).toBe(true);
+    expect(isComposerResetSubmission(null)).toBe(false);
+    expect(isComposerResetSubmission({ conversation: {} } as never)).toBe(false);
   });
 });

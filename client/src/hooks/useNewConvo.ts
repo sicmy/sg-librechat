@@ -33,6 +33,7 @@ import {
   hasModelSelection,
   buildDefaultConvo,
   requestChatFocus,
+  clearDraft,
   logger,
 } from '~/utils';
 import { useDeleteFilesMutation, useGetEndpointsQuery, useGetStartupConfig } from '~/data-provider';
@@ -309,6 +310,10 @@ const useNewConvo = (index = 0) => {
       disableParams?: boolean;
     } = {}) {
       pauseGlobalAudio();
+      clearDraft(Constants.NEW_CONVO);
+      clearDraft(Constants.PENDING_CONVO);
+      localStorage.removeItem(`${LocalStorageKeys.FILES_DRAFT}${Constants.NEW_CONVO}`);
+      localStorage.removeItem(`${LocalStorageKeys.FILES_DRAFT}${Constants.PENDING_CONVO}`);
       if (!saveBadgesState) {
         resetBadges();
       }

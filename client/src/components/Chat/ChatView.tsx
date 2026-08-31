@@ -1,10 +1,10 @@
-import { memo, useCallback } from 'react';
+import { memo, useCallback, useEffect } from 'react';
 import { useRecoilValue } from 'recoil';
 import { useForm } from 'react-hook-form';
 import { Spinner } from '@librechat/client';
 import { useParams } from 'react-router-dom';
 import { Constants, buildTree } from 'librechat-data-provider';
-import type { TChatProject, TMessage } from 'librechat-data-provider';
+import type { TChatProject, TMessage, TSubmission } from 'librechat-data-provider';
 import type { ChatFormValues } from '~/common';
 import {
   useAddedResponse,
@@ -37,6 +37,10 @@ function LoadingSpinner() {
   );
 }
 
+export function isComposerResetSubmission(submission: TSubmission | null): boolean {
+  return submission != null && Object.keys(submission).length === 0;
+}
+
 function ChatView({ index = 0, project }: { index?: number; project?: TChatProject }) {
   const { conversationId } = useParams();
   const localize = useLocalize();
@@ -47,6 +51,12 @@ function ChatView({ index = 0, project }: { index?: number; project?: TChatProje
   const methods = useForm<ChatFormValues>({
     defaultValues: { text: '' },
   });
+
+  useEffect(() => {
+    if (isComposerResetSubmission(rootSubmission)) {
+      methods.reset();
+    }
+  }, [methods, rootSubmission]);
 
   const fileMap = useFileMapContext();
 
