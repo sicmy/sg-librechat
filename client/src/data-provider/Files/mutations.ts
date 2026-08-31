@@ -32,12 +32,13 @@ export const useUploadFileMutation = (
       const height = body.get('height') ?? '';
       const version = body.get('version') ?? '';
       const endpoint = (body.get('endpoint') ?? '') as string;
-      const uploadSseEnabled = sseEnabled && body.get('sg_file_gateway') !== 'true';
+      const usesSGFileGateway = body.get('sg_file_gateway') === 'true';
+      const uploadSseEnabled = sseEnabled && !usesSGFileGateway;
       if (isAssistantsEndpoint(endpoint) && version === '2') {
         return dataService.uploadFile(body, signal, uploadSseEnabled);
       }
 
-      if (width !== '' && height !== '') {
+      if (!usesSGFileGateway && width !== '' && height !== '') {
         return dataService.uploadImage(body, signal, uploadSseEnabled);
       }
 
