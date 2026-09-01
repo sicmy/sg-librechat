@@ -287,10 +287,16 @@ function sendSettledGeneration(
 }
 
 function rejectPreliminaryParentMessageId(res, generationProtocolVersion) {
+  if (typeof res.set === 'function') {
+    res.set('Retry-After', '1');
+  } else if (typeof res.setHeader === 'function') {
+    res.setHeader('Retry-After', '1');
+  }
   return sendGenerationJson(
     res,
-    409,
+    503,
     {
+      code: 'SERVER_NOT_READY',
       error:
         'Cannot submit a follow-up while the selected parent response is still being saved. Please wait and try again.',
     },
