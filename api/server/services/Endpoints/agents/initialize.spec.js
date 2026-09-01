@@ -267,6 +267,94 @@ describe('initializeClient — processAgent ACL gate', () => {
     });
   });
 
+  it('reuses only SG files from the active message branch on follow-up turns', async () => {
+    const activeFileId = 'file_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const otherBranchFileId = 'file_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    for (const fileId of [activeFileId, otherBranchFileId]) {
+      await db.createFile({
+        user: testUser._id,
+        file_id: fileId,
+        bytes: 6,
+        filename: `${fileId}.txt`,
+        filepath: '',
+        object: 'file',
+        type: 'text/plain',
+        source: FileSources.sg_gateway,
+        metadata: {
+          sgGateway: {
+            endpoint: 'SG AI Gateway',
+            jobId: `job_${fileId.slice(5)}`,
+            conversationId: 'draft-scope',
+            state: 'READY',
+          },
+        },
+      });
+    }
+    jest.spyOn(db, 'getMessages').mockResolvedValueOnce([
+      {
+        messageId: 'user-active',
+        parentMessageId: Constants.NO_PARENT,
+        files: [{ file_id: activeFileId }],
+      },
+      {
+        messageId: 'assistant-active',
+        parentMessageId: 'user-active',
+      },
+      {
+        messageId: 'user-other',
+        parentMessageId: Constants.NO_PARENT,
+        files: [{ file_id: otherBranchFileId }],
+      },
+      {
+        messageId: 'assistant-other',
+        parentMessageId: 'user-other',
+      },
+    ]);
+    mockInitializeAgent.mockResolvedValue(makePrimaryConfig([]));
+    const req = makeReq();
+    req.body.messageId = 'message-follow-up';
+    req.body.parentMessageId = 'assistant-active';
+    req.config.endpoints = {
+      custom: [
+        {
+          name: 'SG AI Gateway',
+          apiKey: 'gateway-test-key',
+          baseURL: 'http://gateway.invalid/v1',
+          models: { default: ['default'] },
+          customParams: { defaultParamsEndpoint: 'custom', sgFileGateway: true },
+        },
+      ],
+    };
+    const endpointOption = makeEndpointOption();
+    endpointOption.agent = Promise.resolve({
+      id: PRIMARY_ID,
+      name: 'Primary',
+      provider: 'SG AI Gateway',
+      model: 'default',
+      tools: [],
+    });
+    endpointOption.model_parameters = { model: 'default' };
+
+    await initializeClient({
+      req,
+      res: {},
+      signal: new AbortController().signal,
+      endpointOption,
+    });
+
+    expect(db.getMessages).toHaveBeenCalledWith(
+      { conversationId: 'conv_1' },
+      'messageId parentMessageId files attachments',
+    );
+    expect(agentClientArgs.agent.model_parameters.modelKwargs.sg_internal).toEqual({
+      tenant_id: expect.stringMatching(/^tenant-/),
+      user_id: testUser._id.toString(),
+      conversation_id: 'draft-scope',
+      message_id: 'message-follow-up',
+      file_ids: [activeFileId],
+    });
+  });
+
   it('propagates an expected-MCP-tools failure from the runtime tool loader', async () => {
     const toolError = Object.assign(new Error('Expected MCP tools are unavailable'), {
       code: 'AGENT_EXPECTED_MCP_TOOLS_UNAVAILABLE',
