@@ -42,6 +42,7 @@ function isCodeArtifactToolOutput(output) {
 function extractSGCitationMetadata(output) {
   const responseMetadata = output?.response_metadata;
   const additionalKwargs = output?.additional_kwargs;
+  const rawResponse = additionalKwargs?.__raw_response;
   const candidates = [
     output?.sgCitations,
     output?.sg_citations,
@@ -58,6 +59,9 @@ function extractSGCitationMetadata(output) {
     additionalKwargs?.metadata?.sgCitations,
     additionalKwargs?.metadata?.sg_citations,
     additionalKwargs?.metadata?.citations,
+    rawResponse?.sgCitations,
+    rawResponse?.sg_citations,
+    rawResponse?.citations,
   ];
   for (const candidate of candidates) {
     const value = Array.isArray(candidate)
