@@ -224,6 +224,9 @@ export function getOpenAIConfig(
   ) {
     llmConfig.includeReasoningContent = true;
   }
+  if (options.customParams?.sgFileGateway === true) {
+    llmConfig.__includeRawResponse = true;
+  }
 
   const configOptions: t.OpenAIConfiguration = {};
   if (baseURL) {

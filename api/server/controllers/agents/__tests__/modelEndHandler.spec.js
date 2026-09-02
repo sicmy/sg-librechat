@@ -189,7 +189,7 @@ describe('ModelEndHandler — Vertex thoughtSignature capture (issue #13006 foll
     expect(emitUsage).toHaveBeenCalledWith(expect.objectContaining({ agentId: undefined }));
   });
 
-  it('captures a validated SG citation envelope even when usage is absent', async () => {
+  it('captures validated SG citations from the raw Gateway response', async () => {
     const sink = { latest: null };
     const handler = new ModelEndHandler([], null, null, sink);
     const citations = {
@@ -212,7 +212,11 @@ describe('ModelEndHandler — Vertex thoughtSignature capture (issue #13006 foll
 
     await handler.handle(
       'on_chat_model_end',
-      { output: { response_metadata: { sg_citations: citations } } },
+      {
+        output: {
+          additional_kwargs: { __raw_response: { sg_citations: citations } },
+        },
+      },
       { user_id: 'u1' },
       buildGraph(),
     );

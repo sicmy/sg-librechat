@@ -54,11 +54,16 @@ describe('getOpenAIConfig', () => {
 
     const result = getOpenAIConfig(
       mockApiKey,
-      { modelOptions: { model: 'default' }, addParams: { sg_internal: sgInternal } },
+      {
+        modelOptions: { model: 'default' },
+        addParams: { sg_internal: sgInternal },
+        customParams: { sgFileGateway: true },
+      },
       'SG AI Gateway',
     );
 
     expect(result.llmConfig.modelKwargs).toMatchObject({ sg_internal: sgInternal });
+    expect(result.llmConfig.__includeRawResponse).toBe(true);
   });
 
   it('should separate known and unknown params from addParams', () => {
