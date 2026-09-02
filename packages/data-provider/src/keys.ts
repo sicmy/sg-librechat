@@ -39,6 +39,8 @@ export enum QueryKeys {
   agentDocs = 'agentDocs',
   fileDownload = 'fileDownload',
   filePreview = 'filePreview',
+  sgCitationPage = 'sgCitationPage',
+  sgCitationDownload = 'sgCitationDownload',
   voices = 'voices',
   customConfigSpeech = 'customConfigSpeech',
   prompts = 'prompts',

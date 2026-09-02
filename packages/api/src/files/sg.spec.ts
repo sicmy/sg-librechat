@@ -5,9 +5,11 @@ import type { TEndpoint, TFile } from 'librechat-data-provider';
 import {
   SGFileGatewayError,
   buildSGInternalContext,
+  downloadSGGatewayCitationFile,
   deleteSGGatewayConversation,
   deleteSGGatewayFile,
   getSGGatewayImage,
+  getSGGatewayCitationPage,
   getSGGatewayFileStatus,
   retrySGGatewayFile,
   toSGScopeToken,
@@ -226,6 +228,55 @@ describe('SG file gateway adapter', () => {
     ).resolves.toBeUndefined();
 
     expect(retried.status).toBe('pending');
+  });
+
+  it('fetches citation pages and originals with the persisted conversation scope', async () => {
+    const fileId = 'file_0123456789abcdef0123456789abcdef';
+    const file = {
+      file_id: fileId,
+      type: 'application/pdf',
+      metadata: {
+        sgGateway: {
+          endpoint: 'SG AI Gateway',
+          jobId: 'job_0123456789abcdef0123456789abcdef',
+          conversationId: 'conversation-a',
+          state: 'READY' as const,
+        },
+      },
+    };
+    mockAxios.request.mockResolvedValue({ status: 200, data: Buffer.from('content') });
+
+    await getSGGatewayCitationPage({
+      endpointConfig,
+      file,
+      pageNumber: 3,
+      tenantId: 'tenant-a',
+      userId: 'user-a',
+    });
+    await downloadSGGatewayCitationFile({
+      endpointConfig,
+      file,
+      tenantId: 'tenant-a',
+      userId: 'user-a',
+    });
+
+    expect(mockAxios.request).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        url: `http://gateway.invalid:4000/internal/files/${fileId}/pages/3`,
+        responseType: 'arraybuffer',
+        headers: expect.objectContaining({
+          'X-SG-Conversation-ID': 'conversation-a',
+        }),
+      }),
+    );
+    expect(mockAxios.request).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        url: `http://gateway.invalid:4000/internal/files/${fileId}/download`,
+        responseType: 'arraybuffer',
+      }),
+    );
   });
 
   it('deletes an owner-scoped gateway conversation with matching scope headers', async () => {

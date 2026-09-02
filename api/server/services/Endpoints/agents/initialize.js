@@ -365,6 +365,8 @@ const initializeClient = async ({
   const contextUsageSink = { latest: null, count: 0 };
   /** @type {Array<import('librechat-data-provider').TTokenUsageEvent>} */
   const usageEmitSink = [];
+  /** @type {{ latest: import('librechat-data-provider').SGCitationMetadata | null }} */
+  const sgCitationSink = { latest: null };
 
   const eventHandlers = getDefaultHandlers({
     res,
@@ -383,6 +385,7 @@ const initializeClient = async ({
     usageCost,
     contextUsageSink,
     usageEmitSink,
+    sgCitationSink,
   });
 
   const [
@@ -1187,6 +1190,7 @@ const initializeClient = async ({
      *  them to persist the breakdown + usage rollup on the response message. */
     contextUsageSink,
     usageEmitSink,
+    sgCitationSink,
     startupTelemetry,
     toolInputValidationErrors,
     jobCreatedAt,

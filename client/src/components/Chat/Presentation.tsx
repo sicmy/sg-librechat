@@ -4,6 +4,8 @@ import { FileSources, LocalStorageKeys } from 'librechat-data-provider';
 import type { ExtendedFile } from '~/common';
 import useResetArtifactsOnConversationChange from '~/hooks/Artifacts/useResetArtifactsOnConversationChange';
 import DragDropWrapper from '~/components/Chat/Input/Files/DragDropWrapper';
+import useResetCitationPanel from '~/hooks/Files/useResetCitationPanel';
+import CitationPanel from '~/components/SidePanel/Citations/Panel';
 import { EditorProvider, ArtifactsProvider } from '~/Providers';
 import { useDeleteFilesMutation } from '~/data-provider';
 import { SidePanelGroup } from '~/components/SidePanel';
@@ -23,8 +25,10 @@ export default function Presentation({ children }: { children: React.ReactNode }
   // arriving via SSE auto-focus through `ToolArtifactCard`'s mount effect
   // (gated on `isSubmitting`), restoring the legacy streaming UX.
   const currentArtifactId = useRecoilValue(store.currentArtifactId);
+  const citationPanel = useRecoilValue(store.sgCitationPanel);
 
   useResetArtifactsOnConversationChange();
+  useResetCitationPanel();
 
   const setFilesToDelete = useSetFilesToDelete();
 
@@ -78,9 +82,11 @@ export default function Presentation({ children }: { children: React.ReactNode }
     return null;
   }, [artifactsVisibility, artifacts, currentArtifactId]);
 
+  const sidePanelElement = citationPanel != null ? <CitationPanel /> : artifactsElement;
+
   return (
     <DragDropWrapper className="relative flex w-full grow overflow-hidden bg-presentation">
-      <SidePanelGroup artifacts={artifactsElement}>
+      <SidePanelGroup artifacts={sidePanelElement}>
         <main className="flex h-full flex-col overflow-y-auto" role="main">
           {children}
         </main>

@@ -34,10 +34,11 @@ const primaryFor = (runId, output_tokens) => ({
   runId,
 });
 
-function buildMeta({ snap, latestUsageIndex, usageEvents }) {
+function buildMeta({ snap, latestUsageIndex, usageEvents, sgCitations }) {
   const self = {
     collectedThoughtSignatures: null,
     usageEmitSink: usageEvents,
+    sgCitationSink: { latest: sgCitations ?? null },
     contextUsageSink: snap
       ? { latest: snap, count: 1, latestUsageIndex }
       : { latest: null, count: 0 },
@@ -135,5 +136,17 @@ describe('AgentClient.buildResponseMetadata — snapshot persistence + summary m
     expect(meta.summaryUsedTokens).toBe(260);
     /** run-1's own primary follows the snapshot → snapshot persisted with output 5. */
     expect(meta.contextUsage.completedOutputTokens).toBe(5);
+  });
+
+  it('persists the validated SG citation envelope on the response message', () => {
+    const sgCitations = { schema_version: 1, citations: [] };
+    const meta = buildMeta({
+      snap: null,
+      latestUsageIndex: 0,
+      usageEvents: [],
+      sgCitations,
+    });
+
+    expect(meta.sgCitations).toBe(sgCitations);
   });
 });

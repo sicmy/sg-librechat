@@ -1,4 +1,5 @@
 import * as artifacts from './artifacts';
+import * as citations from './citations';
 import submission from './submission';
 import isTemporary from './temporary';
 import endpoints from './endpoints';
@@ -22,6 +23,7 @@ export * from './steer';
 
 export default {
   ...artifacts,
+  ...citations,
   ...families,
   ...endpoints,
   ...user,

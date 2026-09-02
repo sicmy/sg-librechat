@@ -762,6 +762,185 @@ export type TInput = {
   inputStr: string;
 };
 
+const sgBoundingBoxSchema = z
+  .object({
+    coordinate_space: z.literal('normalized'),
+    left: z.number().min(0).max(1),
+    top: z.number().min(0).max(1),
+    right: z.number().min(0).max(1),
+    bottom: z.number().min(0).max(1),
+  })
+  .strict()
+  .refine((box) => box.right > box.left && box.bottom > box.top);
+
+const sgPageLocatorSchema = z
+  .object({
+    kind: z.literal('page'),
+    page_number: z.number().int().positive(),
+    bbox: sgBoundingBoxSchema.nullable().optional(),
+  })
+  .strict();
+
+const sgImageLocatorSchema = z
+  .object({
+    kind: z.literal('image'),
+    image_id: z.string().min(1),
+    bbox: sgBoundingBoxSchema.nullable().optional(),
+  })
+  .strict();
+
+const sgSlideLocatorSchema = z
+  .object({
+    kind: z.literal('slide'),
+    slide_number: z.number().int().positive(),
+    bbox: sgBoundingBoxSchema.nullable().optional(),
+  })
+  .strict();
+
+const sgCellAddressSchema = z
+  .object({
+    column: z.number().int().positive(),
+    row: z.number().int().positive(),
+  })
+  .strict();
+
+const sgSheetLocatorSchema = z
+  .object({
+    kind: z.literal('sheet'),
+    sheet_name: z.string().min(1),
+    start_cell: sgCellAddressSchema,
+    end_cell: sgCellAddressSchema,
+    bbox: sgBoundingBoxSchema.nullable().optional(),
+  })
+  .strict();
+
+const sgLineLocatorSchema = z
+  .object({
+    kind: z.literal('line'),
+    start_line: z.number().int().positive(),
+    end_line: z.number().int().positive(),
+  })
+  .strict();
+
+const sgRowLocatorSchema = z
+  .object({
+    kind: z.literal('row'),
+    start_row: z.number().int().positive(),
+    end_row: z.number().int().positive(),
+    columns: z.array(z.string().min(1)).default([]),
+  })
+  .strict();
+
+const sgStructuralPathLocatorSchema = z
+  .object({
+    kind: z.literal('structural_path'),
+    path_type: z.enum(['section', 'json', 'xml']),
+    path: z.string().min(1),
+    lines: sgLineLocatorSchema.nullable().optional(),
+    rendered_page: sgPageLocatorSchema.nullable().optional(),
+  })
+  .strict();
+
+const sgTimestampLocatorSchema = z
+  .object({
+    kind: z.literal('timestamp'),
+    start_ms: z.number().int().nonnegative(),
+    end_ms: z.number().int().nonnegative(),
+    speaker: z.string().min(1).nullable().optional(),
+    frame_number: z.number().int().nonnegative().nullable().optional(),
+    bbox: sgBoundingBoxSchema.nullable().optional(),
+  })
+  .strict();
+
+export const sgCitationLocatorSchema = z
+  .discriminatedUnion('kind', [
+    sgPageLocatorSchema,
+    sgImageLocatorSchema,
+    sgSlideLocatorSchema,
+    sgSheetLocatorSchema,
+    sgLineLocatorSchema,
+    sgRowLocatorSchema,
+    sgStructuralPathLocatorSchema,
+    sgTimestampLocatorSchema,
+  ])
+  .superRefine((locator, context) => {
+    if (
+      locator.kind === 'sheet' &&
+      (locator.end_cell.column < locator.start_cell.column ||
+        locator.end_cell.row < locator.start_cell.row)
+    ) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: 'Sheet range must be ordered' });
+    }
+    if (locator.kind === 'line' && locator.end_line < locator.start_line) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: 'Line range must be ordered' });
+    }
+    if (
+      locator.kind === 'row' &&
+      (locator.end_row < locator.start_row ||
+        new Set(locator.columns).size !== locator.columns.length)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Row range must be ordered with unique columns',
+      });
+    }
+    if (locator.kind === 'timestamp' && locator.end_ms < locator.start_ms) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: 'Time range must be ordered' });
+    }
+  });
+
+export const sgTypedCitationSchema = z
+  .object({
+    schema_version: z.literal(1),
+    citation_id: z.string().min(1),
+    file_id: z.string().min(1),
+    display_name: z.string().min(1),
+    mime_type: z.string().min(1),
+    locator: sgCitationLocatorSchema,
+    quote: z.string().trim().min(1).max(4096),
+    relevance_score: z.number().min(0).max(1),
+    preview_path: z.string().nullable().optional(),
+    download_path: z.string().min(1),
+  })
+  .strict()
+  .superRefine((citation, context) => {
+    const expectedDownload = `/internal/files/${citation.file_id}/download`;
+    if (citation.download_path !== expectedDownload) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['download_path'],
+        message: 'Citation download path must match its file ID',
+      });
+    }
+    const expectedPreview =
+      citation.mime_type === 'application/pdf' && citation.locator.kind === 'page'
+        ? `/internal/files/${citation.file_id}/pages/${citation.locator.page_number}`
+        : null;
+    if ((citation.preview_path ?? null) !== expectedPreview) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['preview_path'],
+        message: 'Citation preview path must match its typed locator',
+      });
+    }
+  });
+
+export const sgCitationMetadataSchema = z
+  .object({
+    schema_version: z.literal(1),
+    citations: z.array(sgTypedCitationSchema).max(32),
+  })
+  .strict()
+  .refine(
+    (metadata) =>
+      new Set(metadata.citations.map((citation) => citation.citation_id)).size ===
+      metadata.citations.length,
+  );
+
+export type SGCitationLocator = z.infer<typeof sgCitationLocatorSchema>;
+export type SGTypedCitation = z.infer<typeof sgTypedCitationSchema>;
+export type SGCitationMetadata = z.infer<typeof sgCitationMetadataSchema>;
+
 export const tExampleSchema = z.object({
   input: z.object({
     content: z.string(),
@@ -811,7 +990,12 @@ export const tMessageSchema = z.object({
   iconURL: z.string().nullable().optional(),
   feedback: feedbackSchema.optional(),
   /** metadata */
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z
+    .object({
+      sgCitations: sgCitationMetadataSchema.optional(),
+    })
+    .catchall(z.unknown())
+    .optional(),
   /** Output tokens for assistant messages, calibrated prompt-side estimate for user messages */
   tokenCount: z.number().optional(),
   contextMeta: z

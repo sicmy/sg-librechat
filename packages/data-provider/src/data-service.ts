@@ -789,6 +789,23 @@ export const getAuthenticatedImage = async (url: string): Promise<AxiosResponse>
   });
 };
 
+export const getSGCitationPage = async (
+  fileId: string,
+  pageNumber: number,
+): Promise<AxiosResponse<Blob>> => {
+  return request.getResponse(endpoints.sgCitationPage(fileId, pageNumber), {
+    responseType: 'blob',
+    headers: { Accept: 'image/png' },
+  });
+};
+
+export const getSGCitationDownload = async (fileId: string): Promise<AxiosResponse<Blob>> => {
+  return request.getResponse(endpoints.sgCitationDownload(fileId), {
+    responseType: 'blob',
+    headers: { Accept: 'application/octet-stream' },
+  });
+};
+
 export const getFileDownloadURL = async (
   userId: string,
   file_id: string,

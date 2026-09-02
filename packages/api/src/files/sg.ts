@@ -1,5 +1,5 @@
-import * as crypto from 'crypto';
 import * as fs from 'fs';
+import * as crypto from 'crypto';
 import FormData from 'form-data';
 import { FileContext, FileSources } from 'librechat-data-provider';
 import type {
@@ -10,9 +10,9 @@ import type {
   TFileUpload,
 } from 'librechat-data-provider';
 import type { AxiosRequestConfig } from 'axios';
-import { createAxiosInstance } from '~/utils/axios';
 import { applySSRFSafeAgentIfDirect } from '~/auth/agent';
 import { applyAxiosProxyConfig } from '~/utils/proxy';
+import { createAxiosInstance } from '~/utils/axios';
 
 const axios = createAxiosInstance();
 const TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -190,6 +190,71 @@ export async function getSGGatewayImage({
   const url = getGatewayURL(
     endpointConfig.baseURL,
     `/internal/files/${encodeURIComponent(file.file_id)}/image`,
+  );
+  return requestGateway<Buffer>({
+    method: 'GET',
+    url,
+    endpointConfig,
+    tenantId,
+    userId,
+    conversationId: gateway.conversationId,
+    allowedAddresses,
+    responseType: 'arraybuffer',
+  });
+}
+
+export async function getSGGatewayCitationPage({
+  endpointConfig,
+  file,
+  pageNumber,
+  tenantId,
+  userId,
+  allowedAddresses,
+}: {
+  endpointConfig: SGEndpointConfig;
+  file: Pick<TFile, 'file_id' | 'type' | 'metadata'>;
+  pageNumber: number;
+  tenantId?: string | null;
+  userId: string;
+  allowedAddresses?: string[] | null;
+}): Promise<Buffer> {
+  if (file.type !== 'application/pdf' || !Number.isSafeInteger(pageNumber) || pageNumber < 1) {
+    throw new SGFileGatewayError(404, 'resource_not_found');
+  }
+  const gateway = requireGatewayMetadata(file);
+  const url = getGatewayURL(
+    endpointConfig.baseURL,
+    `/internal/files/${encodeURIComponent(file.file_id)}/pages/${pageNumber}`,
+  );
+  return requestGateway<Buffer>({
+    method: 'GET',
+    url,
+    endpointConfig,
+    tenantId,
+    userId,
+    conversationId: gateway.conversationId,
+    allowedAddresses,
+    responseType: 'arraybuffer',
+  });
+}
+
+export async function downloadSGGatewayCitationFile({
+  endpointConfig,
+  file,
+  tenantId,
+  userId,
+  allowedAddresses,
+}: {
+  endpointConfig: SGEndpointConfig;
+  file: Pick<TFile, 'file_id' | 'metadata'>;
+  tenantId?: string | null;
+  userId: string;
+  allowedAddresses?: string[] | null;
+}): Promise<Buffer> {
+  const gateway = requireGatewayMetadata(file);
+  const url = getGatewayURL(
+    endpointConfig.baseURL,
+    `/internal/files/${encodeURIComponent(file.file_id)}/download`,
   );
   return requestGateway<Buffer>({
     method: 'GET',

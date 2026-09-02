@@ -1,5 +1,6 @@
 import type { TMessage } from 'librechat-data-provider';
 import { EffortBadge } from '../../EffortSelector';
+import CitationBadges from './Citations/Badges';
 import MessageQuotes from './MessageQuotes';
 import SkillPills from './SkillPills';
 import Files from './Files';
@@ -19,6 +20,7 @@ const Container = ({ children, message }: { children: React.ReactNode; message?:
       </>
     )}
     {children}
+    {message?.isCreatedByUser === false && <CitationBadges message={message} />}
   </div>
 );
 

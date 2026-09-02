@@ -143,6 +143,45 @@ export const useSharedFileDownload = (
   );
 };
 
+export const useSGCitationPage = (
+  fileId?: string,
+  pageNumber?: number,
+): QueryObserverResult<Blob, unknown> => {
+  return useQuery<Blob, unknown>(
+    [QueryKeys.sgCitationPage, fileId ?? '', pageNumber ?? 0],
+    async () => {
+      if (!fileId || !pageNumber) {
+        throw new Error('Citation page requires a file and page number');
+      }
+      const response = await dataService.getSGCitationPage(fileId, pageNumber);
+      return response.data;
+    },
+    {
+      enabled: !!fileId && Number.isSafeInteger(pageNumber) && Number(pageNumber) > 0,
+      retry: false,
+      refetchOnWindowFocus: false,
+      staleTime: Infinity,
+    },
+  );
+};
+
+export const useSGCitationDownload = (fileId?: string): QueryObserverResult<Blob, unknown> => {
+  return useQuery<Blob, unknown>(
+    [QueryKeys.sgCitationDownload, fileId ?? ''],
+    async () => {
+      if (!fileId) {
+        throw new Error('Citation download requires a file');
+      }
+      const response = await dataService.getSGCitationDownload(fileId);
+      return response.data;
+    },
+    {
+      enabled: false,
+      retry: false,
+    },
+  );
+};
+
 export const useCodeOutputDownload = (url = ''): QueryObserverResult<string> => {
   return useQuery(
     [QueryKeys.fileDownload, url],

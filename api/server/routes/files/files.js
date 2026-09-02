@@ -15,6 +15,8 @@ const {
   uploadSGGatewayFile,
   getSGGatewayFilePath,
   getSGGatewayImage,
+  getSGGatewayCitationPage,
+  downloadSGGatewayCitationFile,
   getSGGatewayFileStatus,
   retrySGGatewayFile,
   deleteSGGatewayFile,
@@ -639,6 +641,72 @@ router.get('/sg-image/:file_id', fileAccess, async (req, res) => {
     logger.error('[SG IMAGE ROUTE] Failed to render Gateway image:', error);
     const status = Number.isInteger(error?.statusCode) ? error.statusCode : 502;
     return res.status(status).json({ message: 'Gateway image is unavailable' });
+  }
+});
+
+router.get('/sg-citation/:file_id/pages/:page_number', fileAccess, async (req, res) => {
+  try {
+    const file = req.fileAccess.file;
+    const pageNumber = Number(req.params.page_number);
+    if (
+      file.source !== FileSources.sg_gateway ||
+      file.type !== 'application/pdf' ||
+      !Number.isSafeInteger(pageNumber) ||
+      pageNumber < 1
+    ) {
+      return res.status(404).json({ message: 'Citation page not found' });
+    }
+    const endpoint = file.metadata?.sgGateway?.endpoint;
+    const endpointConfig = endpoint ? getSGFileEndpoint(req, endpoint) : null;
+    if (!endpointConfig) {
+      return res.status(409).json({ message: 'SG Gateway file metadata is unavailable' });
+    }
+    const content = await getSGGatewayCitationPage({
+      endpointConfig,
+      file,
+      pageNumber,
+      tenantId: req.user.tenantId,
+      userId: req.user.id,
+      allowedAddresses: req.config?.endpoints?.allowedAddresses,
+    });
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    return res.status(200).send(content);
+  } catch (error) {
+    logger.error('[SG CITATION PAGE ROUTE] Failed to render Gateway page:', error);
+    const status = Number.isInteger(error?.statusCode) ? error.statusCode : 502;
+    return res.status(status).json({ message: 'Citation page is unavailable' });
+  }
+});
+
+router.get('/sg-citation/:file_id/download', fileAccess, async (req, res) => {
+  try {
+    const file = req.fileAccess.file;
+    if (file.source !== FileSources.sg_gateway) {
+      return res.status(404).json({ message: 'Citation file not found' });
+    }
+    const endpoint = file.metadata?.sgGateway?.endpoint;
+    const endpointConfig = endpoint ? getSGFileEndpoint(req, endpoint) : null;
+    if (!endpointConfig) {
+      return res.status(409).json({ message: 'SG Gateway file metadata is unavailable' });
+    }
+    const content = await downloadSGGatewayCitationFile({
+      endpointConfig,
+      file,
+      tenantId: req.user.tenantId,
+      userId: req.user.id,
+      allowedAddresses: req.config?.endpoints?.allowedAddresses,
+    });
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Content-Disposition', getContentDisposition(file.filename));
+    res.setHeader('Content-Type', file.type || 'application/octet-stream');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    return res.status(200).send(content);
+  } catch (error) {
+    logger.error('[SG CITATION DOWNLOAD ROUTE] Failed to download Gateway file:', error);
+    const status = Number.isInteger(error?.statusCode) ? error.statusCode : 502;
+    return res.status(status).json({ message: 'Citation file is unavailable' });
   }
 });
 

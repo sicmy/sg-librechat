@@ -189,6 +189,37 @@ describe('ModelEndHandler — Vertex thoughtSignature capture (issue #13006 foll
     expect(emitUsage).toHaveBeenCalledWith(expect.objectContaining({ agentId: undefined }));
   });
 
+  it('captures a validated SG citation envelope even when usage is absent', async () => {
+    const sink = { latest: null };
+    const handler = new ModelEndHandler([], null, null, sink);
+    const citations = {
+      schema_version: 1,
+      citations: [
+        {
+          schema_version: 1,
+          citation_id: 'cite_123',
+          file_id: 'file_123',
+          display_name: 'policy.pdf',
+          mime_type: 'application/pdf',
+          locator: { kind: 'page', page_number: 2 },
+          quote: 'Monthly inspection is required.',
+          relevance_score: 0.94,
+          preview_path: '/internal/files/file_123/pages/2',
+          download_path: '/internal/files/file_123/download',
+        },
+      ],
+    };
+
+    await handler.handle(
+      'on_chat_model_end',
+      { output: { response_metadata: { sg_citations: citations } } },
+      { user_id: 'u1' },
+      buildGraph(),
+    );
+
+    expect(sink.latest).toEqual(citations);
+  });
+
   it('throws when collectedUsage is not an array (existing contract)', () => {
     expect(() => new ModelEndHandler(null)).toThrow('collectedUsage must be an array');
   });
