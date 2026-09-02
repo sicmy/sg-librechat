@@ -46,6 +46,8 @@ jest.mock('@librechat/api', () => ({
   ...jest.requireActual('@librechat/api'),
   refreshS3FileUrls: jest.fn(),
   deleteSGGatewayFile: jest.fn().mockResolvedValue(),
+  downloadSGGatewayCitationFile: jest.fn(),
+  getSGGatewayCitationPage: jest.fn(),
   getSGGatewayImage: jest.fn(),
   getSGGatewayFilePath: jest.requireActual('@librechat/api').getSGGatewayFilePath,
 }));
@@ -67,7 +69,12 @@ jest.mock('~/config', () => ({
 
 const { processDeleteRequest } = require('~/server/services/Files/process');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
-const { deleteSGGatewayFile, getSGGatewayImage } = require('@librechat/api');
+const {
+  deleteSGGatewayFile,
+  downloadSGGatewayCitationFile,
+  getSGGatewayCitationPage,
+  getSGGatewayImage,
+} = require('@librechat/api');
 
 // Import the router after mocks
 const router = require('./files');
@@ -226,6 +233,79 @@ describe('File Routes - Delete with Agent Access', () => {
       expect(response.headers['cache-control']).toBe('private, no-store');
       expect(response.body).toEqual(content);
       expect(getSGGatewayImage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: otherUserId.toString(),
+          file: expect.objectContaining({ file_id: sgFileId }),
+        }),
+      );
+    });
+  });
+
+  describe('SG citation routes', () => {
+    it('proxies an owned PDF page with private image headers', async () => {
+      const sgFileId = `file_${uuidv4().replaceAll('-', '')}`;
+      await createFile({
+        user: otherUserId,
+        file_id: sgFileId,
+        filename: 'policy.pdf',
+        filepath: '',
+        bytes: 200,
+        type: 'application/pdf',
+        source: FileSources.sg_gateway,
+        metadata: {
+          sgGateway: {
+            endpoint: 'SG AI Gateway',
+            jobId: 'job-citation-test',
+            conversationId: 'conversation-citation-test',
+            state: 'READY',
+          },
+        },
+      });
+      const content = Buffer.from('page-png');
+      getSGGatewayCitationPage.mockResolvedValue(content);
+
+      const response = await request(app).get(`/files/sg-citation/${sgFileId}/pages/2`);
+
+      expect(response.status).toBe(200);
+      expect(response.headers['content-type']).toMatch(/^image\/png/);
+      expect(response.headers['cache-control']).toBe('private, no-store');
+      expect(getSGGatewayCitationPage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pageNumber: 2,
+          userId: otherUserId.toString(),
+          file: expect.objectContaining({ file_id: sgFileId }),
+        }),
+      );
+    });
+
+    it('downloads only an owned SG file through the scoped Gateway adapter', async () => {
+      const sgFileId = `file_${uuidv4().replaceAll('-', '')}`;
+      await createFile({
+        user: otherUserId,
+        file_id: sgFileId,
+        filename: 'policy.pdf',
+        filepath: '',
+        bytes: 200,
+        type: 'application/pdf',
+        source: FileSources.sg_gateway,
+        metadata: {
+          sgGateway: {
+            endpoint: 'SG AI Gateway',
+            jobId: 'job-download-test',
+            conversationId: 'conversation-download-test',
+            state: 'READY',
+          },
+        },
+      });
+      downloadSGGatewayCitationFile.mockResolvedValue(Buffer.from('original-pdf'));
+
+      const response = await request(app).get(`/files/sg-citation/${sgFileId}/download`);
+
+      expect(response.status).toBe(200);
+      expect(response.headers['content-type']).toMatch(/^application\/pdf/);
+      expect(response.headers['content-disposition']).toContain('policy.pdf');
+      expect(response.headers['cache-control']).toBe('private, no-store');
+      expect(downloadSGGatewayCitationFile).toHaveBeenCalledWith(
         expect.objectContaining({
           userId: otherUserId.toString(),
           file: expect.objectContaining({ file_id: sgFileId }),

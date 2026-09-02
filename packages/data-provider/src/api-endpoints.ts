@@ -304,6 +304,12 @@ export const mcpServer = (serverName: string) => `${BASE_URL}/api/mcp/servers/${
 export const revertAgentVersion = (agent_id: string) => `${agents({ path: `${agent_id}/revert` })}`;
 
 export const files = () => `${BASE_URL}/api/files`;
+
+export const sgCitationPage = (fileId: string, pageNumber: number) =>
+  `${files()}/sg-citation/${encodeURIComponent(fileId)}/pages/${pageNumber}`;
+
+export const sgCitationDownload = (fileId: string) =>
+  `${files()}/sg-citation/${encodeURIComponent(fileId)}/download`;
 export const fileUpload = () => `${BASE_URL}/api/files`;
 export const fileDelete = () => `${BASE_URL}/api/files`;
 export const fileDownload = (userId: string, fileId: string) =>

@@ -7,6 +7,7 @@ const {
   FileContext,
   ErrorTypes,
   UsageEvents,
+  sgCitationMetadataSchema,
 } = require('librechat-data-provider');
 const {
   GraphEvents,
@@ -38,6 +39,38 @@ function isCodeArtifactToolOutput(output) {
   return isCodeSessionToolName(output.name) || isHostFileAuthoringArtifact(output.artifact);
 }
 
+function extractSGCitationMetadata(output) {
+  const responseMetadata = output?.response_metadata;
+  const additionalKwargs = output?.additional_kwargs;
+  const candidates = [
+    output?.sgCitations,
+    output?.sg_citations,
+    output?.citations,
+    responseMetadata?.sgCitations,
+    responseMetadata?.sg_citations,
+    responseMetadata?.citations,
+    responseMetadata?.metadata?.sgCitations,
+    responseMetadata?.metadata?.sg_citations,
+    responseMetadata?.metadata?.citations,
+    additionalKwargs?.sgCitations,
+    additionalKwargs?.sg_citations,
+    additionalKwargs?.citations,
+    additionalKwargs?.metadata?.sgCitations,
+    additionalKwargs?.metadata?.sg_citations,
+    additionalKwargs?.metadata?.citations,
+  ];
+  for (const candidate of candidates) {
+    const value = Array.isArray(candidate)
+      ? { schema_version: 1, citations: candidate }
+      : candidate;
+    const parsed = sgCitationMetadataSchema.safeParse(value);
+    if (parsed.success && parsed.data.citations.length > 0) {
+      return parsed.data;
+    }
+  }
+  return null;
+}
+
 class ModelEndHandler {
   /**
    * @param {Array<UsageMetadata>} collectedUsage
@@ -54,14 +87,22 @@ class ModelEndHandler {
    *   a no-op for them even when the map is provided.
    * @param {(data: Record<string, unknown>) => Promise<void> | void} [emitUsage] Optional
    *   callback to stream per-call token usage to the client.
+   * @param {{ latest: import('librechat-data-provider').SGCitationMetadata | null } | null}
+   *   [sgCitationSink] Latest validated SG citation envelope for the response message.
    */
-  constructor(collectedUsage, collectedThoughtSignatures = null, emitUsage = null) {
+  constructor(
+    collectedUsage,
+    collectedThoughtSignatures = null,
+    emitUsage = null,
+    sgCitationSink = null,
+  ) {
     if (!Array.isArray(collectedUsage)) {
       throw new Error('collectedUsage must be an array');
     }
     this.collectedUsage = collectedUsage;
     this.collectedThoughtSignatures = collectedThoughtSignatures;
     this.emitUsage = emitUsage;
+    this.sgCitationSink = sgCitationSink;
   }
 
   finalize(errorMessage) {
@@ -100,6 +141,11 @@ class ModelEndHandler {
           messageId: metadata.run_id,
           conversationId: metadata.thread_id,
         });
+      }
+
+      const sgCitations = extractSGCitationMetadata(data?.output);
+      if (this.sgCitationSink && sgCitations) {
+        this.sgCitationSink.latest = sgCitations;
       }
 
       const usage = data?.output?.usage_metadata;
@@ -351,6 +397,7 @@ function getDefaultHandlers({
   usageCost = null,
   contextUsageSink = null,
   usageEmitSink = null,
+  sgCitationSink = null,
 }) {
   if (!res || !aggregateContent) {
     throw new Error(
@@ -395,6 +442,7 @@ function getDefaultHandlers({
       collectedUsage,
       collectedThoughtSignatures,
       emitTokenUsage,
+      sgCitationSink,
     ),
     [GraphEvents.TOOL_END]: new ToolEndHandler(toolEndCallback, logger),
     [GraphEvents.ON_RUN_STEP]: {

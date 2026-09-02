@@ -171,6 +171,7 @@ class AgentClient extends BaseClient {
       subagentAggregatorsByToolCallId,
       contextUsageSink,
       usageEmitSink,
+      sgCitationSink,
       toolInputValidationErrors,
       ...clientOptions
     } = options;
@@ -186,6 +187,8 @@ class AgentClient extends BaseClient {
      *  persisted on `metadata.usage`.
      *  @type {Array<import('librechat-data-provider').TTokenUsageEvent> | undefined} */
     this.usageEmitSink = usageEmitSink;
+    /** Latest validated SG citation envelope captured from provider response metadata. */
+    this.sgCitationSink = sgCitationSink;
     /** Schema-validation exceptions keyed by tool-call ID. The completion
      *  handler consumes these to distinguish execution failures from tool
      *  output that merely contains similar text.
@@ -2041,6 +2044,9 @@ class AgentClient extends BaseClient {
     const usage = aggregateEmittedUsage(usageEvents);
     if (usage) {
       metadata.usage = usage;
+    }
+    if (this.sgCitationSink?.latest) {
+      metadata.sgCitations = this.sgCitationSink.latest;
     }
     return Object.keys(metadata).length > 0 ? metadata : undefined;
   }

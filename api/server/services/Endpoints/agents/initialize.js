@@ -20,17 +20,20 @@ const {
   getLazySubagentConfigId,
   isSGFileGatewayEndpoint,
   buildSGInternalContext,
+  getThreadData,
 } = require('@librechat/api');
 const {
   Permissions,
   ResourceType,
   EModelEndpoint,
+  FileSources,
   PermissionBits,
   PermissionTypes,
   MAX_SUBAGENT_DEPTH,
   isAgentsEndpoint,
   getResponseSender,
   AgentCapabilities,
+  Constants,
   Tools,
   MAX_SUBAGENT_GRAPH_NODES,
   MAX_SUBAGENT_RUN_CONFIGS,
@@ -362,6 +365,8 @@ const initializeClient = async ({
   const contextUsageSink = { latest: null, count: 0 };
   /** @type {Array<import('librechat-data-provider').TTokenUsageEvent>} */
   const usageEmitSink = [];
+  /** @type {{ latest: import('librechat-data-provider').SGCitationMetadata | null }} */
+  const sgCitationSink = { latest: null };
 
   const eventHandlers = getDefaultHandlers({
     res,
@@ -380,6 +385,7 @@ const initializeClient = async ({
     usageCost,
     contextUsageSink,
     usageEmitSink,
+    sgCitationSink,
   });
 
   const [
@@ -420,23 +426,43 @@ const initializeClient = async ({
    */
   const manualSkills = extractManualSkills(req.body);
   let sgInternal;
-
-  if (requestFiles.length > 0) {
-    const customEndpointConfig = appConfig?.endpoints?.[EModelEndpoint.custom]?.find(
-      (endpointConfig) => endpointConfig.name === primaryAgent.provider,
+  const customEndpointConfig = appConfig?.endpoints?.[EModelEndpoint.custom]?.find(
+    (endpointConfig) => endpointConfig.name === primaryAgent.provider,
+  );
+  if (isSGFileGatewayEndpoint(customEndpointConfig)) {
+    const requestedFileIds = requestFiles.flatMap((file) =>
+      typeof file?.file_id === 'string' && file.file_id ? [file.file_id] : [],
     );
-    if (isSGFileGatewayEndpoint(customEndpointConfig)) {
-      const requestedFileIds = requestFiles.flatMap((file) =>
-        typeof file?.file_id === 'string' && file.file_id ? [file.file_id] : [],
-      );
+    const hasThreadAnchor =
+      conversationId &&
+      conversationId !== Constants.NEW_CONVO &&
+      parentMessageId &&
+      parentMessageId !== Constants.NO_PARENT;
+    const threadMessages = hasThreadAnchor
+      ? await db.getMessages({ conversationId }, 'messageId parentMessageId files attachments')
+      : [];
+    const threadFileIds = hasThreadAnchor
+      ? getThreadData(threadMessages ?? [], parentMessageId).fileIds
+      : [];
+    const candidateFileIds = [...new Set([...requestedFileIds, ...threadFileIds])];
+    if (candidateFileIds.length > 0) {
       const ownerFilter = {
-        file_id: { $in: requestedFileIds },
+        file_id: { $in: candidateFileIds },
         user: req.user.id,
         ...(req.user.tenantId ? { tenantId: req.user.tenantId } : {}),
       };
       const authorizedFiles = (await db.getFiles(ownerFilter)) ?? [];
+      const authorizedFilesById = new Map(authorizedFiles.map((file) => [file.file_id, file]));
+      const inheritedSGFileIds = threadFileIds.filter((fileId) => {
+        const file = authorizedFilesById.get(fileId);
+        return (
+          file?.source === FileSources.sg_gateway &&
+          file?.metadata?.sgGateway?.endpoint === primaryAgent.provider
+        );
+      });
+      const contextFileIds = [...new Set([...requestedFileIds, ...inheritedSGFileIds])];
       sgInternal = buildSGInternalContext({
-        requestFiles,
+        requestFiles: contextFileIds.map((file_id) => ({ file_id })),
         authorizedFiles,
         tenantId: req.user.tenantId,
         userId: req.user.id,
@@ -1164,6 +1190,7 @@ const initializeClient = async ({
      *  them to persist the breakdown + usage rollup on the response message. */
     contextUsageSink,
     usageEmitSink,
+    sgCitationSink,
     startupTelemetry,
     toolInputValidationErrors,
     jobCreatedAt,

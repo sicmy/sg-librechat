@@ -265,6 +265,17 @@ const FIELD_MUTATIONS: Array<[string, Partial<TMessage>]> = [
   ['model', { model: 'gpt-5' }],
   ['endpoint', { endpoint: 'anthropic' }],
   ['iconURL', { iconURL: 'https://example.com/icon.png' }],
+  [
+    'SG citations',
+    {
+      metadata: {
+        sgCitations: {
+          schema_version: 1,
+          citations: [],
+        },
+      },
+    },
+  ],
   ['feedback rating', { feedback: { rating: 'thumbsDown' } as unknown as TMessage['feedback'] }],
   ['files', { files: [{ file_id: 'f1' }] as TMessage['files'] }],
   [

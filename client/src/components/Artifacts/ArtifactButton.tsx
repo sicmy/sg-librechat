@@ -15,6 +15,7 @@ const ArtifactButton = ({ artifact }: { artifact: Artifact | null }) => {
   const [artifacts, setArtifacts] = useRecoilState(store.artifactsState);
   const [currentArtifactId, setCurrentArtifactId] = useRecoilState(store.currentArtifactId);
   const resetCurrentArtifactId = useResetRecoilState(store.currentArtifactId);
+  const resetCitationPanel = useResetRecoilState(store.sgCitationPanel);
   const isSelected = artifact?.id === currentArtifactId;
   const [visibleArtifacts, setVisibleArtifacts] = useRecoilState(store.visibleArtifacts);
 
@@ -65,6 +66,7 @@ const ArtifactButton = ({ artifact }: { artifact: Artifact | null }) => {
 
           setCurrentArtifactId(artifact.id);
           setVisible(true);
+          resetCitationPanel();
 
           if (artifacts?.[artifact.id] == null) {
             setArtifacts(visibleArtifacts);

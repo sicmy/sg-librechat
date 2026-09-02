@@ -421,7 +421,7 @@ describe('ResumableAgentController resume metadata', () => {
     expect(mockGenerationJobManager.createJob).not.toHaveBeenCalled();
   });
 
-  it('rejects an underscore-suffixed parent that is not persisted', async () => {
+  it('reports an unpersisted underscore-suffixed parent as retryable readiness', async () => {
     const conversationId = 'conversation-123';
     const initializeClient = jest.fn();
     const req = {
@@ -441,6 +441,7 @@ describe('ResumableAgentController resume metadata', () => {
     const res = {
       json: jest.fn(),
       status: jest.fn(() => res),
+      set: jest.fn(() => res),
     };
 
     await AgentController(req, res, jest.fn(), initializeClient, null);
@@ -449,9 +450,11 @@ describe('ResumableAgentController resume metadata', () => {
       { user: 'user-123', messageId: 'pending-response_', conversationId },
       '_id',
     );
-    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.set).toHaveBeenCalledWith('Retry-After', '1');
+    expect(res.status).toHaveBeenCalledWith(503);
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({
+        code: 'SERVER_NOT_READY',
         error: expect.stringContaining('selected parent response is still being saved'),
       }),
     );
