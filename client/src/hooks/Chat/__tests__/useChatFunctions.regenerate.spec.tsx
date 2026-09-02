@@ -1,5 +1,5 @@
 import { renderHook, act } from '@testing-library/react';
-import { Constants, QueryKeys, EModelEndpoint } from 'librechat-data-provider';
+import { Constants, QueryKeys, EModelEndpoint, ReasoningEffort } from 'librechat-data-provider';
 import type { TConversation, TMessage, TSubmission } from 'librechat-data-provider';
 import useChatFunctions from '../useChatFunctions';
 
@@ -245,7 +245,7 @@ describe('useChatFunctions ask', () => {
     ['the default', undefined, 'high'],
     ['the selected value', 'max', 'max'],
   ])('snapshots %s SG Gateway effort on the submitted turn', (_label, effort, expected) => {
-    mockGetQueryData.mockImplementation((queryKey: unknown) =>
+    mockGetQueryData.mockImplementation((queryKey?: unknown) =>
       Array.isArray(queryKey) && queryKey[0] === QueryKeys.endpoints
         ? { 'SG AI Gateway': { type: EModelEndpoint.custom } }
         : {},
@@ -328,7 +328,7 @@ describe('useChatFunctions regenerate', () => {
   });
 
   it('reuses the original user turn effort when regenerating', () => {
-    mockGetQueryData.mockImplementation((queryKey: unknown) =>
+    mockGetQueryData.mockImplementation((queryKey?: unknown) =>
       Array.isArray(queryKey) && queryKey[0] === QueryKeys.endpoints
         ? { 'SG AI Gateway': { type: EModelEndpoint.custom } }
         : {},
@@ -343,7 +343,7 @@ describe('useChatFunctions regenerate', () => {
     const { result, setSubmission } = renderAsk(messages, 'conversation-1', {
       endpoint: 'SG AI Gateway',
       model: 'default',
-      reasoningEffort: 'max',
+      reasoningEffort: ReasoningEffort.max,
     });
 
     act(() => {

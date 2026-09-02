@@ -4,6 +4,7 @@ import path from 'path';
 const DEFAULT_BASE_URL = 'http://localhost:3080';
 const DEFAULT_MONGO_URI = 'mongodb://127.0.0.1:27017/LibreChat-e2e';
 const DEFAULT_RUNTIME_ENV_PATH = path.resolve(__dirname, '../specs/.test-results/runtime-env.json');
+const HERMETIC_DOTENV_PATH = path.resolve(__dirname, '../config/hermetic.env.example');
 const GENERATED_CREDS_KEY = crypto.randomBytes(32).toString('hex');
 const GENERATED_CREDS_IV = crypto.randomBytes(16).toString('hex');
 const GENERATED_JWT_SECRET = crypto.randomBytes(32).toString('hex');
@@ -119,6 +120,8 @@ export function getBaseE2EEnv(): Record<string, string> {
 
   return {
     ...getPassthroughEnv(),
+    DOTENV_CONFIG_PATH: HERMETIC_DOTENV_PATH,
+    E2E_HERMETIC_ENV: 'true',
     NODE_ENV: 'CI',
     HOST: process.env.E2E_HOST ?? host,
     PORT: process.env.E2E_PORT ?? port,

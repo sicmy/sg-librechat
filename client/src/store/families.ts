@@ -11,13 +11,7 @@ import {
   useSetRecoilState,
   useRecoilCallback,
 } from 'recoil';
-import type {
-  EModelEndpoint,
-  TConversation,
-  TSubmission,
-  TMessage,
-  TPreset,
-} from 'librechat-data-provider';
+import type { TConversation, TSubmission, TMessage, TPreset } from 'librechat-data-provider';
 import type { GenerationProtocolVersion } from '~/data-provider/SSE/protocol';
 import type { TOptionSettings, ExtendedFile } from '~/common';
 import {
@@ -143,7 +137,7 @@ const conversationIdByIndex = selectorFamily<string | null, string | number>({
       get(conversationByIndex(index))?.conversationId ?? null,
 });
 
-const conversationEndpointByIndex = selectorFamily<EModelEndpoint | null, string | number>({
+const conversationEndpointByIndex = selectorFamily<string | null, string | number>({
   key: 'conversationEndpointByIndex',
   get:
     (index: string | number) =>
@@ -152,7 +146,7 @@ const conversationEndpointByIndex = selectorFamily<EModelEndpoint | null, string
 });
 
 /** Returns `endpointType ?? endpoint`, matching the effective endpoint used for feature gating. */
-const effectiveEndpointByIndex = selectorFamily<EModelEndpoint | null, string | number>({
+const effectiveEndpointByIndex = selectorFamily<string | null, string | number>({
   key: 'effectiveEndpointByIndex',
   get:
     (index: string | number) =>

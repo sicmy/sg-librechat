@@ -40,7 +40,6 @@ import {
   markTitleGenerationProcessed,
 } from '~/data-provider';
 import useFocusRegeneratedResponse from '~/hooks/Chat/useFocusRegeneratedResponse';
-import { getSgEffort } from '~/utils/endpoints';
 import { shouldResetSubagentAtomsOnConversationChange } from './cleanup';
 import useAttachmentHandler from '~/hooks/SSE/useAttachmentHandler';
 import useContentHandler from '~/hooks/SSE/useContentHandler';
@@ -48,6 +47,7 @@ import useStepHandler from '~/hooks/SSE/useStepHandler';
 import { useApplyAgentTemplate } from '~/hooks/Agents';
 import { useAuthContext } from '~/hooks/AuthContext';
 import { MESSAGE_UPDATE_INTERVAL } from '~/common';
+import { getSgEffort } from '~/utils/endpoints';
 import { useLiveAnnouncer } from '~/Providers';
 import store from '~/store';
 
@@ -75,7 +75,9 @@ export const resolveFinalReasoningEffort = (
   currentEffort: TConversation['reasoning_effort'],
   submittedEffort: TConversation['reasoning_effort'],
   serverEffort: TConversation['reasoning_effort'],
-  submittedConversation?: Pick<TConversation, 'endpoint' | 'model' | 'reasoning_effort'> | null,
+  submittedConversation?: Partial<
+    Pick<TConversation, 'endpoint' | 'model' | 'reasoning_effort'>
+  > | null,
   effectiveSubmittedEffort?: TConversation['reasoning_effort'],
 ): TConversation['reasoning_effort'] => {
   if (getSgEffort(submittedConversation) == null) {

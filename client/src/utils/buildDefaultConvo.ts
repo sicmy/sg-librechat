@@ -1,6 +1,5 @@
 import {
   parseConvo,
-  EModelEndpoint,
   isAgentsEndpoint,
   isEphemeralAgentId,
   isAssistantsEndpoint,
@@ -18,7 +17,7 @@ const buildDefaultConvo = ({
 }: {
   models: string[];
   conversation: TConversation;
-  endpoint?: EModelEndpoint | null;
+  endpoint?: string | null;
   lastConversationSetup: TConversation | null;
   defaultParamsEndpoint?: string | null;
 }): TConversation => {

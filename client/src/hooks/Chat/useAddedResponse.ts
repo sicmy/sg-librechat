@@ -7,7 +7,7 @@ import {
   isAssistantsEndpoint,
   getDefaultParamsEndpoint,
 } from 'librechat-data-provider';
-import type { TEndpointsConfig, EModelEndpoint, TConversation } from 'librechat-data-provider';
+import type { TEndpointsConfig, TConversation } from 'librechat-data-provider';
 import type { AssistantListItem, NewConversationParams } from '~/common';
 import useAssistantListMap from '~/hooks/Assistants/useAssistantListMap';
 import { buildDefaultConvo, getDefaultEndpoint } from '~/utils';
@@ -93,7 +93,7 @@ export default function useAddedResponse() {
       newConversation = buildDefaultConvo({
         conversation: newConversation,
         lastConversationSetup: preset as TConversation,
-        endpoint: defaultEndpoint ?? ('' as EModelEndpoint),
+        endpoint: defaultEndpoint ?? '',
         models,
         defaultParamsEndpoint,
       });

@@ -1,5 +1,5 @@
-import { useRecoilValue } from 'recoil';
 import { useCallback, useRef, useEffect } from 'react';
+import { useRecoilValue } from 'recoil';
 import { useGetModelsQuery } from 'librechat-data-provider/react-query';
 import {
   getEndpointField,
@@ -9,13 +9,12 @@ import {
 } from 'librechat-data-provider';
 import type {
   TEndpointsConfig,
-  EModelEndpoint,
   TModelsConfig,
   TConversation,
   TPreset,
 } from 'librechat-data-provider';
-import type { AssistantListItem } from '~/common';
 import type { SetterOrUpdater } from 'recoil';
+import type { AssistantListItem } from '~/common';
 import useAssistantListMap from '~/hooks/Assistants/useAssistantListMap';
 import { buildDefaultConvo, getDefaultEndpoint, logger } from '~/utils';
 import { useGetEndpointsQuery } from '~/data-provider';
@@ -126,7 +125,7 @@ const useGenerateConvo = ({
       conversation = buildDefaultConvo({
         conversation,
         lastConversationSetup: preset as TConversation,
-        endpoint: defaultEndpoint ?? ('' as EModelEndpoint),
+        endpoint: defaultEndpoint ?? '',
         models,
         defaultParamsEndpoint,
       });

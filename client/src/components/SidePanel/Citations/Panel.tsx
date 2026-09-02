@@ -56,6 +56,7 @@ function PagePreview({ citation }: { citation: SGTypedCitation }) {
         />
         {box && (
           <span
+            data-testid="sg-citation-highlight"
             className="pointer-events-none absolute border-2 border-text-primary bg-surface-active/20 shadow-sm"
             style={{
               left: `${box.left * 100}%`,

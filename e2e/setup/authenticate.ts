@@ -1,9 +1,11 @@
-import { chromium } from '@playwright/test';
-import type { FullConfig, Page } from '@playwright/test';
+import { chromium, request as playwrightRequest } from '@playwright/test';
+import type { Browser, FullConfig, Page } from '@playwright/test';
 import type { User } from '../types';
 import cleanupUser from './cleanupUser';
 import dotenv from 'dotenv';
-dotenv.config();
+if (process.env.E2E_HERMETIC_ENV !== 'true') {
+  dotenv.config();
+}
 
 const timeout = Number(process.env.E2E_AUTH_TIMEOUT ?? 15000);
 const chromiumChannel = process.env.E2E_CHROMIUM_CHANNEL || undefined;
@@ -40,6 +42,51 @@ function appURL(baseURL: string, pathname = '') {
   return new URL(pathname.replace(/^\/+/, ''), normalizedBaseURL).toString();
 }
 
+async function authenticateHermetic(
+  browser: Browser,
+  baseURL: string,
+  storageState: string,
+  user: User,
+): Promise<void> {
+  const api = await playwrightRequest.newContext({
+    baseURL,
+    storageState: { cookies: [], origins: [] },
+  });
+  try {
+    const registration = await api.post('/api/auth/register', {
+      data: {
+        email: user.email,
+        name: user.name,
+        password: user.password,
+        confirm_password: user.password,
+      },
+    });
+    if (!registration.ok()) {
+      throw new Error(`Hermetic E2E registration failed with status ${registration.status()}`);
+    }
+    const loginResponse = await api.post('/api/auth/login', {
+      data: { email: user.email, password: user.password },
+    });
+    if (!loginResponse.ok()) {
+      throw new Error(`Hermetic E2E login failed with status ${loginResponse.status()}`);
+    }
+
+    const context = await browser.newContext({ storageState: await api.storageState() });
+    try {
+      await context.addInitScript(() => localStorage.setItem('navVisible', 'true'));
+      const page = await context.newPage();
+      const conversationURL = appURL(baseURL, 'c/new');
+      await page.goto(conversationURL, { timeout });
+      await page.waitForURL(conversationURL, { timeout });
+      await context.storageState({ path: storageState });
+    } finally {
+      await context.close();
+    }
+  } finally {
+    await api.dispose();
+  }
+}
+
 async function authenticate(config: FullConfig, user: User) {
   console.log('🤖: global setup has been started');
   const { baseURL, storageState } = config.projects[0].use;
@@ -54,12 +101,18 @@ async function authenticate(config: FullConfig, user: User) {
     ...(chromiumChannel ? { channel: chromiumChannel } : {}),
   });
   try {
-    const page = await browser.newPage();
     console.log('🤖: 🗝  authenticating user:', user.email);
 
     if (typeof baseURL !== 'string') {
       throw new Error('🤖: baseURL is not defined');
     }
+    if (process.env.E2E_HERMETIC_ENV === 'true') {
+      await authenticateHermetic(browser, baseURL, storageState, user);
+      console.log('🤖: ✔️  hermetic authentication state saved in', storageState);
+      return;
+    }
+
+    const page = await browser.newPage();
     const conversationURL = appURL(baseURL, 'c/new');
     const loginURL = appURL(baseURL, 'login');
 

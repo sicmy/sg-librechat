@@ -161,7 +161,9 @@ function neutralizeDotenvSecrets(envFile: string, keep: Set<string>) {
 writeRuntimeMockConfig();
 neutralizeCredentialEnv(process.env, preservedCredentialEnvKeys);
 Object.assign(process.env, baseEnv);
-neutralizeDotenvSecrets(path.resolve(rootPath, '.env'), preservedCredentialEnvKeys);
+if (process.env.E2E_HERMETIC_ENV !== 'true') {
+  neutralizeDotenvSecrets(path.resolve(rootPath, '.env'), preservedCredentialEnvKeys);
+}
 
 export default defineConfig({
   globalSetup: require.resolve('./setup/global-setup'),
