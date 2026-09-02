@@ -1,12 +1,12 @@
 import React, { createContext, useCallback, useContext, useMemo, useRef } from 'react';
 import { useRecoilValue } from 'recoil';
-import type { EModelEndpoint, TConversation } from 'librechat-data-provider';
+import type { TConversation } from 'librechat-data-provider';
 import type { ConvoGenerator } from '~/common';
 import { useGetConversation, useNewConvo } from '~/hooks';
 import store from '~/store';
 
 interface ModelSelectorChatContextValue {
-  endpoint?: EModelEndpoint | null;
+  endpoint?: string | null;
   model?: string | null;
   spec?: string | null;
   agent_id?: string | null;

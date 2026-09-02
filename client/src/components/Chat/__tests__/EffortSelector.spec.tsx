@@ -2,6 +2,7 @@ import React from 'react';
 import userEvent from '@testing-library/user-event';
 import { render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom';
+import { ReasoningEffort } from 'librechat-data-provider';
 import type { TMessage } from 'librechat-data-provider';
 import EffortSelector, { EffortControl } from '../EffortSelector';
 import Container from '../Messages/Content/Container';
@@ -38,7 +39,7 @@ jest.mock('~/hooks', () => ({
 describe('EffortControl', () => {
   test('shows an icon-only response-depth select with Balanced selected', async () => {
     const user = userEvent.setup();
-    render(<EffortControl value="high" onChange={jest.fn()} />);
+    render(<EffortControl value={ReasoningEffort.high} onChange={jest.fn()} />);
 
     const select = screen.getByRole('combobox', { name: 'Response depth: Balanced' });
     expect(select).toBeInTheDocument();
@@ -57,7 +58,7 @@ describe('EffortControl', () => {
   test('reports the selected effort', async () => {
     const user = userEvent.setup();
     const onChange = jest.fn();
-    render(<EffortControl value="high" onChange={onChange} />);
+    render(<EffortControl value={ReasoningEffort.high} onChange={onChange} />);
 
     await user.click(screen.getByRole('combobox', { name: 'Response depth: Balanced' }));
     await user.click(screen.getByRole('option', { name: 'Deep' }));
@@ -102,10 +103,14 @@ describe('submitted effort badge', () => {
 
   test('shows the recorded response depth to administrators', () => {
     mockUserRole = 'ADMIN';
-    const message = {
+    const message: TMessage = {
+      messageId: 'user-message-1',
+      conversationId: 'conversation-1',
+      parentMessageId: null,
+      text: QUESTION_TEXT,
       isCreatedByUser: true,
       metadata: { sgEffort: 'high' },
-    } as TMessage;
+    };
 
     render(
       <Container message={message}>
@@ -117,10 +122,14 @@ describe('submitted effort badge', () => {
   });
 
   test('hides the recorded response depth from regular users', () => {
-    const message = {
+    const message: TMessage = {
+      messageId: 'user-message-1',
+      conversationId: 'conversation-1',
+      parentMessageId: null,
+      text: QUESTION_TEXT,
       isCreatedByUser: true,
       metadata: { sgEffort: 'high' },
-    } as TMessage;
+    };
 
     render(
       <Container message={message}>

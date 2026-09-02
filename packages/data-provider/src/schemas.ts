@@ -992,6 +992,7 @@ export const tMessageSchema = z.object({
   /** metadata */
   metadata: z
     .object({
+      sgEffort: z.enum(['low', 'high', 'max']).optional(),
       sgCitations: sgCitationMetadataSchema.optional(),
     })
     .catchall(z.unknown())
@@ -1126,7 +1127,7 @@ const DocumentType: z.ZodType<DocumentTypeValue> = z.lazy(() =>
 
 export const tConversationSchema = z.object({
   conversationId: z.string().nullable(),
-  endpoint: eModelEndpointSchema.nullable(),
+  endpoint: extendedModelEndpointSchema.nullable(),
   endpointType: eModelEndpointSchema.nullable().optional(),
   isArchived: z.boolean().optional(),
   pinned: z.boolean().optional(),

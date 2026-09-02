@@ -1,9 +1,4 @@
-import type {
-  TPreset,
-  TConversation,
-  EModelEndpoint,
-  TEndpointsConfig,
-} from 'librechat-data-provider';
+import type { TPreset, TConversation, TEndpointsConfig } from 'librechat-data-provider';
 import { getLocalStorageItems } from './localStorage';
 import { mapEndpoints } from './endpoints';
 
@@ -14,11 +9,11 @@ type TDefaultEndpoint = { convoSetup: TConvoSetup; endpointsConfig: TEndpointsCo
 const getEndpointFromSetup = (
   convoSetup: TConvoSetup | null,
   endpointsConfig: TEndpointsConfig,
-): EModelEndpoint | null => {
+): string | null => {
   let { endpoint: targetEndpoint = '' } = convoSetup || {};
   targetEndpoint = targetEndpoint ?? '';
   if (targetEndpoint && endpointsConfig?.[targetEndpoint]) {
-    return targetEndpoint as EModelEndpoint;
+    return targetEndpoint;
   } else if (targetEndpoint) {
     console.warn(`Illegal target endpoint ${targetEndpoint}`, endpointsConfig);
   }
@@ -54,7 +49,7 @@ const getDefinedEndpoint = (endpointsConfig: TEndpointsConfig) => {
 const getDefaultEndpoint = ({
   convoSetup,
   endpointsConfig,
-}: TDefaultEndpoint): EModelEndpoint | undefined => {
+}: TDefaultEndpoint): string | undefined => {
   return (
     getEndpointFromSetup(convoSetup, endpointsConfig) ||
     getEndpointFromLocalStorage(endpointsConfig) ||

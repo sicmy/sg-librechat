@@ -193,7 +193,7 @@ describe('useFileHandling', () => {
 
     it('uses one draft scope for every SG Gateway file in the same batch', async () => {
       mockConversation = {
-        conversationId: Constants.NEW_CONVO,
+        conversationId: String(Constants.NEW_CONVO),
         endpoint: 'SG AI Gateway',
         endpointType: 'custom',
       };

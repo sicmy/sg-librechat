@@ -1,4 +1,4 @@
-import { Constants } from 'librechat-data-provider';
+import { Constants, ReasoningEffort } from 'librechat-data-provider';
 import type { EventSubmission, TMessage } from 'librechat-data-provider';
 import {
   buildCreatedInitialResponse,
@@ -11,17 +11,17 @@ import {
 describe('resolveFinalReasoningEffort', () => {
   it('keeps a selection made while the previous response was running', () => {
     expect(
-      resolveFinalReasoningEffort('max', 'low', 'low', {
+      resolveFinalReasoningEffort(ReasoningEffort.max, ReasoningEffort.low, ReasoningEffort.low, {
         endpoint: 'SG AI Gateway',
         model: 'default',
-        reasoning_effort: 'low',
+        reasoning_effort: ReasoningEffort.low,
       }),
     ).toBe('max');
   });
 
   it('leaves non-SG endpoint finalization under server control', () => {
     expect(
-      resolveFinalReasoningEffort('max', 'low', 'low', {
+      resolveFinalReasoningEffort(ReasoningEffort.max, ReasoningEffort.low, ReasoningEffort.low, {
         endpoint: 'Other Gateway',
         model: 'default',
       }),
@@ -31,18 +31,18 @@ describe('resolveFinalReasoningEffort', () => {
   it('compares the selector with the effective regeneration effort', () => {
     expect(
       resolveFinalReasoningEffort(
-        'max',
-        'max',
-        'low',
+        ReasoningEffort.max,
+        ReasoningEffort.max,
+        ReasoningEffort.low,
         { endpoint: 'SG AI Gateway', model: 'default' },
-        'low',
+        ReasoningEffort.low,
       ),
     ).toBe('max');
   });
 
   it('treats an omitted current SG effort as High', () => {
     expect(
-      resolveFinalReasoningEffort(undefined, 'high', 'high', {
+      resolveFinalReasoningEffort(undefined, ReasoningEffort.high, ReasoningEffort.high, {
         endpoint: 'SG AI Gateway',
         model: 'default',
       }),

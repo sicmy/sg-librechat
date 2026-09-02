@@ -100,15 +100,17 @@ const sgEfforts = new Set<ReasoningEffort>([
   ReasoningEffort.max,
 ]);
 
+const isSgEffort = (value: ReasoningEffort): value is SgEffort => sgEfforts.has(value);
+
 export function getSgEffort(
-  conversation?: Pick<t.TConversation, 'endpoint' | 'model' | 'reasoning_effort'> | null,
+  conversation?: Partial<Pick<t.TConversation, 'endpoint' | 'model' | 'reasoning_effort'>> | null,
 ): SgEffort | undefined {
   if (conversation?.endpoint !== 'SG AI Gateway' || conversation.model !== 'default') {
     return;
   }
 
   const configuredEffort = conversation.reasoning_effort ?? ReasoningEffort.high;
-  return sgEfforts.has(configuredEffort) ? (configuredEffort as SgEffort) : ReasoningEffort.high;
+  return isSgEffort(configuredEffort) ? configuredEffort : ReasoningEffort.high;
 }
 
 /**

@@ -46,7 +46,7 @@ export default function useSideNavLinks({
 }: {
   hidePanel?: () => void;
   keyProvided: boolean;
-  endpoint?: EModelEndpoint | null;
+  endpoint?: string | null;
   endpointType?: EModelEndpoint | null;
   interfaceConfig: Partial<TInterfaceConfig>;
   endpointsConfig: TEndpointsConfig;
