@@ -1,5 +1,6 @@
-import { defineConfig, devices } from '@playwright/test';
+import fs from 'fs';
 import path from 'path';
+import { defineConfig, devices } from '@playwright/test';
 import { getE2EBaseURL, getLocalE2EEnv } from './setup/env';
 
 const ambientRuntimeAllowlist = new Set([
@@ -54,9 +55,11 @@ const hermeticProxyEnv = {
 const rootPath = path.resolve(__dirname, '..');
 const serverPath = path.resolve(rootPath, 'e2e/setup/start-server.js');
 const noDotenvPath = path.resolve(rootPath, 'e2e/specs/.test-results/no-dotenv');
-const gatewayRoot = process.env.SG_GATEWAY_E2E_ROOT;
-if (!gatewayRoot) {
-  throw new Error('SG_GATEWAY_E2E_ROOT must point to the sg-librechat Task 1E worktree');
+const gatewayRoot =
+  process.env.SG_GATEWAY_E2E_ROOT ?? path.resolve(rootPath, '..', 'sg-ai-platform');
+const gatewayServiceRoot = path.resolve(gatewayRoot, 'services/sg-ai-gateway');
+if (!fs.existsSync(path.resolve(gatewayServiceRoot, 'tests/e2e/stub_provider.py'))) {
+  throw new Error('SG_GATEWAY_E2E_ROOT must point to the sg-ai-platform repository');
 }
 
 for (const key of Object.keys(process.env)) {
@@ -65,7 +68,6 @@ for (const key of Object.keys(process.env)) {
   }
 }
 
-const gatewayServiceRoot = path.resolve(gatewayRoot, 'services/sg-ai-gateway');
 const stubPath = path.resolve(gatewayServiceRoot, 'tests/e2e/stub_provider.py');
 const gatewayConfigPath = path.resolve(gatewayServiceRoot, 'tests/e2e/gateway.yaml');
 
