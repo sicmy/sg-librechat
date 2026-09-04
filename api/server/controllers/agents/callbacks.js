@@ -75,6 +75,16 @@ function extractSGCitationMetadata(output) {
   return null;
 }
 
+function captureSGCitationMetadata(output, sink) {
+  if (!sink) {
+    return;
+  }
+  const citations = extractSGCitationMetadata(output);
+  if (citations) {
+    sink.latest = citations;
+  }
+}
+
 class ModelEndHandler {
   /**
    * @param {Array<UsageMetadata>} collectedUsage
@@ -147,10 +157,7 @@ class ModelEndHandler {
         });
       }
 
-      const sgCitations = extractSGCitationMetadata(data?.output);
-      if (this.sgCitationSink && sgCitations) {
-        this.sgCitationSink.latest = sgCitations;
-      }
+      captureSGCitationMetadata(data?.output, this.sgCitationSink);
 
       const usage = data?.output?.usage_metadata;
       if (!usage) {
@@ -442,6 +449,11 @@ function getDefaultHandlers({
     return emitForJob({ event: UsageEvents.ON_TOKEN_USAGE, data: payload });
   };
   const handlers = {
+    [GraphEvents.CHAT_MODEL_STREAM]: {
+      handle: async (_event, data) => {
+        captureSGCitationMetadata(data?.chunk, sgCitationSink);
+      },
+    },
     [GraphEvents.CHAT_MODEL_END]: new ModelEndHandler(
       collectedUsage,
       collectedThoughtSignatures,

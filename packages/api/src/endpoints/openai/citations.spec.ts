@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { ChatOpenAI } from '@langchain/openai';
+import { Providers, initializeModel } from '@librechat/agents';
 import { HumanMessage } from '@librechat/agents/langchain/messages';
 import type { AddressInfo } from 'node:net';
 
@@ -56,12 +56,15 @@ describe('SG Gateway raw citation response', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     try {
       const address = server.address() as AddressInfo;
-      const model = new ChatOpenAI({
-        apiKey: 'contract-key',
-        model: 'default',
-        streaming: true,
-        __includeRawResponse: true,
-        configuration: { baseURL: `http://127.0.0.1:${address.port}/v1` },
+      const model = initializeModel({
+        provider: Providers.OPENAI,
+        clientOptions: {
+          apiKey: 'contract-key',
+          model: 'default',
+          streaming: true,
+          __includeRawResponse: true,
+          configuration: { baseURL: `http://127.0.0.1:${address.port}/v1` },
+        },
       });
 
       const message = await model.invoke([new HumanMessage('hello')]);

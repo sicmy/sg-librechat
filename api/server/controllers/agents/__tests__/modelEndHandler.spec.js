@@ -18,7 +18,7 @@ jest.mock('~/server/services/Files/process', () => ({
   saveBase64Image: jest.fn(),
 }));
 
-const { ModelEndHandler } = require('../callbacks');
+const { ModelEndHandler, getDefaultHandlers } = require('../callbacks');
 
 const buildGraph = () => ({
   getAgentContext: () => ({
@@ -26,6 +26,24 @@ const buildGraph = () => ({
     clientOptions: { model: 'gemini-3.1-flash-lite-preview' },
   }),
 });
+
+const citations = {
+  schema_version: 1,
+  citations: [
+    {
+      schema_version: 1,
+      citation_id: 'cite_123',
+      file_id: 'file_123',
+      display_name: 'policy.pdf',
+      mime_type: 'application/pdf',
+      locator: { kind: 'page', page_number: 2 },
+      quote: 'Monthly inspection is required.',
+      relevance_score: 0.94,
+      preview_path: '/internal/files/file_123/pages/2',
+      download_path: '/internal/files/file_123/download',
+    },
+  ],
+};
 
 describe('ModelEndHandler — Vertex thoughtSignature capture (issue #13006 follow-up)', () => {
   it('maps non-empty signatures onto tool_call_ids in order', async () => {
@@ -192,23 +210,6 @@ describe('ModelEndHandler — Vertex thoughtSignature capture (issue #13006 foll
   it('captures validated SG citations from the raw Gateway response', async () => {
     const sink = { latest: null };
     const handler = new ModelEndHandler([], null, null, sink);
-    const citations = {
-      schema_version: 1,
-      citations: [
-        {
-          schema_version: 1,
-          citation_id: 'cite_123',
-          file_id: 'file_123',
-          display_name: 'policy.pdf',
-          mime_type: 'application/pdf',
-          locator: { kind: 'page', page_number: 2 },
-          quote: 'Monthly inspection is required.',
-          relevance_score: 0.94,
-          preview_path: '/internal/files/file_123/pages/2',
-          download_path: '/internal/files/file_123/download',
-        },
-      ],
-    };
 
     await handler.handle(
       'on_chat_model_end',
@@ -220,6 +221,24 @@ describe('ModelEndHandler — Vertex thoughtSignature capture (issue #13006 foll
       { user_id: 'u1' },
       buildGraph(),
     );
+
+    expect(sink.latest).toEqual(citations);
+  });
+
+  it('captures SG citations from a terminal stream chunk before model-end aggregation', async () => {
+    const { GraphEvents } = jest.requireActual('@librechat/agents');
+    const sink = { latest: null };
+    const handlers = getDefaultHandlers({
+      res: { write: jest.fn() },
+      aggregateContent: jest.fn(),
+      toolEndCallback: jest.fn(),
+      collectedUsage: [],
+      sgCitationSink: sink,
+    });
+
+    await handlers[GraphEvents.CHAT_MODEL_STREAM].handle(GraphEvents.CHAT_MODEL_STREAM, {
+      chunk: { additional_kwargs: { __raw_response: { sg_citations: citations } } },
+    });
 
     expect(sink.latest).toEqual(citations);
   });
