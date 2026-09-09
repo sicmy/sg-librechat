@@ -235,6 +235,7 @@ export default function ChatRoute() {
       newConversation({
         modelsData: modelsQuery.data,
         template: projectTemplate,
+        restoreFileDraft: true,
         ...(preset ? { preset } : {}),
       });
 
@@ -283,6 +284,7 @@ export default function ChatRoute() {
       newConversation({
         modelsData: modelsQuery.data,
         template: projectTemplate,
+        restoreFileDraft: true,
         ...(preset ? { preset } : {}),
       });
       hasSetConversation.current = true;

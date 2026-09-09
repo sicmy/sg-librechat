@@ -4,6 +4,7 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 import mongoMeili, { type SchemaWithMeiliMethods } from '~/models/plugins/mongoMeili';
 import { createConversationModel } from '~/models/convo';
 import { createMessageModel } from '~/models/message';
+import { runAsSystem } from '~/config/tenantContext';
 
 interface DynamicMeiliDocument extends mongoose.Document {
   docId: string;
@@ -81,6 +82,20 @@ jest.mock('meilisearch', () => {
 });
 
 describe('Meilisearch Mongoose plugin', () => {
+  test('query update/delete results without document hooks always complete', async () => {
+    const Model = createDynamicMeiliModel('GenerationRecoveryQueryHooks');
+    await Model.create({ docId: 'delivery', user: 'owner', title: 'pending', isTemporary: true });
+    await expect(
+      Model.updateOne({ docId: 'delivery' }, { title: 'delivered' }),
+    ).resolves.toMatchObject({ modifiedCount: 1 });
+    await expect(
+      Model.updateOne({ docId: 'absent' }, { title: 'unchanged' }),
+    ).resolves.toMatchObject({ matchedCount: 0 });
+    await expect(Model.deleteOne({ docId: 'delivery' })).resolves.toMatchObject({
+      deletedCount: 1,
+    });
+    await expect(Model.deleteOne({ docId: 'absent' })).resolves.toMatchObject({ deletedCount: 0 });
+  });
   const OLD_ENV = process.env;
 
   let mongoServer: MongoMemoryServer;
@@ -1014,6 +1029,129 @@ describe('Meilisearch Mongoose plugin', () => {
 
       // The error should propagate all the way up
       await expect(conversationModel.syncWithMeili()).rejects.toThrow('Custom sync error');
+    });
+  });
+
+  describe('bounded expiry search cleanup', () => {
+    function searchFixture(initial: Array<{ docId: string; user: string }>) {
+      let documents = [...initial];
+      let pending: string[] = [];
+      const getDocuments = jest.fn(
+        async ({ limit, offset }: { limit: number; offset: number }) => ({
+          results: documents.slice(offset, offset + limit),
+        }),
+      );
+      const deleteDocuments = jest.fn(async (ids: string[]) => {
+        pending = ids;
+        return { taskUid: 7 };
+      });
+      const waitForTask = jest.fn(async () => {
+        documents = documents.filter((doc) => !pending.includes(doc.docId));
+        return { status: 'succeeded' };
+      });
+      mockIndex.mockReturnValue({
+        getRawInfo: jest.fn(),
+        updateSettings: jest.fn(),
+        addDocuments: mockAddDocuments,
+        updateDocuments: mockUpdateDocuments,
+        getDocuments,
+        deleteDocuments,
+        waitForTask,
+      });
+      return { getDocuments, deleteDocuments, waitForTask, documents: () => documents };
+    }
+
+    test('confirmed deletion precedes offset advancement and bounded passes continue to the end', async () => {
+      const remote = searchFixture(
+        ['live-a', 'expired', 'orphan', 'live-b', 'orphan-b'].map((docId) => ({
+          docId,
+          user: 'owner',
+        })),
+      );
+      const Model = createDynamicMeiliModel('BoundedExpirySearch');
+      await Model.create([
+        { docId: 'live-a', user: 'owner', title: 'keep' },
+        { docId: 'live-b', user: 'owner', title: 'keep' },
+        { docId: 'expired', user: 'owner', title: 'expired body', expiredAt: new Date(0) },
+      ]);
+      expect(await runAsSystem(async () => Model.sweepMeiliIndex(2, 1))).toEqual({
+        scanned: 2,
+        deleted: 1,
+        complete: false,
+      });
+      expect(remote.waitForTask).toHaveBeenCalledWith(7, { timeOutMs: 10_000, intervalMs: 100 });
+      expect(await runAsSystem(async () => Model.sweepMeiliIndex(2, 8))).toEqual({
+        scanned: 3,
+        deleted: 2,
+        complete: true,
+      });
+      expect(remote.getDocuments.mock.calls[1][0].offset).toBe(1);
+      expect(remote.documents().map((doc) => doc.docId)).toEqual(['live-a', 'live-b']);
+    });
+
+    test('failed confirmation leaves the page retryable and success can remove it later', async () => {
+      const remote = searchFixture([{ docId: 'orphan', user: 'owner' }]);
+      const Model = createDynamicMeiliModel('RetryExpirySearch');
+      remote.waitForTask.mockRejectedValueOnce(new Error('synthetic_task_timeout'));
+      await expect(runAsSystem(async () => Model.sweepMeiliIndex())).rejects.toThrow(
+        'synthetic_task_timeout',
+      );
+      expect(remote.documents()).toHaveLength(1);
+      expect(await runAsSystem(async () => Model.sweepMeiliIndex())).toEqual({
+        scanned: 1,
+        deleted: 1,
+        complete: true,
+      });
+      expect(remote.getDocuments.mock.calls.map(([args]) => args.offset)).toEqual([0, 0]);
+    });
+
+    test('scope and batch validation precede any remote request', async () => {
+      const remote = searchFixture([]);
+      const Model = createDynamicMeiliModel('ScopedExpirySearch');
+      await expect(Model.sweepMeiliIndex()).rejects.toThrow('system_scope_required');
+      await expect(runAsSystem(async () => Model.sweepMeiliIndex(0))).rejects.toThrow(
+        'invalid_search_cleanup_batch',
+      );
+      expect(remote.getDocuments).not.toHaveBeenCalled();
+    });
+
+    test('legacy pipe-normalized conversation IDs are not mistaken for orphaned documents', async () => {
+      const deletion = jest.fn();
+      mockIndex.mockReturnValue({
+        getRawInfo: jest.fn(),
+        updateSettings: jest.fn(),
+        addDocuments: mockAddDocuments,
+        updateDocuments: mockUpdateDocuments,
+        getDocuments: jest.fn(async () => ({
+          results: [{ conversationId: 'a--b--c', user: 'owner' }],
+        })),
+        deleteDocuments: deletion,
+      });
+      const schema = new mongoose.Schema({
+        conversationId: String,
+        user: String,
+        isTemporary: Boolean,
+        expiredAt: Date,
+      });
+      schema.plugin(mongoMeili, {
+        mongoose,
+        host: 'foo',
+        apiKey: 'bar',
+        indexName: 'normalizedcleanup',
+        primaryKey: 'conversationId',
+      });
+      const Model = mongoose.model('NormalizedCleanup', schema) as mongoose.Model<{
+        conversationId: string;
+        user: string;
+      }> &
+        Pick<SchemaWithMeiliMethods, 'sweepMeiliIndex'>;
+      await Model.insertMany([{ conversationId: 'a|b--c', user: 'owner' }]);
+      expect(await runAsSystem(async () => Model.sweepMeiliIndex())).toEqual({
+        scanned: 1,
+        deleted: 0,
+        complete: true,
+      });
+      expect(deletion).not.toHaveBeenCalled();
     });
   });
 

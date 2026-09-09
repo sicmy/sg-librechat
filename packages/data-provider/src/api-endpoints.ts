@@ -308,8 +308,17 @@ export const files = () => `${BASE_URL}/api/files`;
 export const sgCitationPage = (fileId: string, pageNumber: number) =>
   `${files()}/sg-citation/${encodeURIComponent(fileId)}/pages/${pageNumber}`;
 
+export const sgCitationImage = (fileId: string) =>
+  `${files()}/sg-image/${encodeURIComponent(fileId)}`;
+
+export const sgDocumentPreview = (fileId: string) =>
+  `${files()}/sg-citation/${encodeURIComponent(fileId)}/document-preview`;
+
 export const sgCitationDownload = (fileId: string) =>
   `${files()}/sg-citation/${encodeURIComponent(fileId)}/download`;
+
+export const sgCitationFrame = (fileId: string, frameNumber: number) =>
+  `${files()}/sg-citation/${encodeURIComponent(fileId)}/frames/${frameNumber}`;
 export const fileUpload = () => `${BASE_URL}/api/files`;
 export const fileDelete = () => `${BASE_URL}/api/files`;
 export const fileDownload = (userId: string, fileId: string) =>
@@ -321,6 +330,8 @@ export const filePreview = (fileId: string) =>
   `${BASE_URL}/api/files/${encodeURIComponent(fileId)}/preview`;
 export const fileRetry = (fileId: string) =>
   `${BASE_URL}/api/files/${encodeURIComponent(fileId)}/retry`;
+export const fileCancel = (fileId: string) =>
+  `${BASE_URL}/api/files/${encodeURIComponent(fileId)}/cancel`;
 export const fileConfig = () => `${BASE_URL}/api/files/config`;
 /** Owner-scoped usage touch so queued attachments outlive the upload-window TTL. */
 export const fileUsage = () => `${BASE_URL}/api/files/usage`;

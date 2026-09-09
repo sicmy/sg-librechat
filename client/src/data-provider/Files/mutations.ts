@@ -1,4 +1,5 @@
 import { useToastContext } from '@librechat/client';
+import { useSetRecoilState } from 'recoil';
 import { EToolResources } from 'librechat-data-provider';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -12,6 +13,15 @@ import type { UseMutationResult } from '@tanstack/react-query';
 import type * as t from 'librechat-data-provider';
 import { useGetStartupConfig } from '../Endpoints';
 import { useLocalize } from '~/hooks';
+import store from '~/store';
+
+const sgResourceQueryKeys = new Set<string>([
+  QueryKeys.filePreview,
+  QueryKeys.sgCitationPage,
+  QueryKeys.sgCitationImage,
+  QueryKeys.sgCitationFrame,
+  QueryKeys.sgCitationDownload,
+]);
 
 export const useUploadFileMutation = (
   _options?: t.UploadMutationOptions,
@@ -149,9 +159,21 @@ export const useRetrySGFileMutation = (): UseMutationResult<
   string,
   unknown
 > => {
+  return useSGFileActionMutation('retry');
+};
+
+export const useCancelSGFileMutation = () => useSGFileActionMutation('cancel');
+
+const useSGFileActionMutation = (action: 'retry' | 'cancel') => {
   const queryClient = useQueryClient();
-  return useMutation([MutationKeys.sgFileRetry], {
-    mutationFn: (fileId: string) => dataService.retryFileProcessing(fileId),
+  return useMutation([action === 'retry' ? MutationKeys.sgFileRetry : MutationKeys.sgFileCancel], {
+    mutationFn: (fileId: string) =>
+      action === 'retry'
+        ? dataService.retryFileProcessing(fileId)
+        : dataService.cancelFileProcessing(fileId),
+    onMutate: async (fileId: string) => {
+      await queryClient.cancelQueries([QueryKeys.filePreview, fileId]);
+    },
     onSuccess: (data, fileId) => {
       /**
        * The failed preview query is still actively observed by FileRow, so
@@ -160,6 +182,7 @@ export const useRetrySGFileMutation = (): UseMutationResult<
        * re-enables polling without the stale `failed` payload winning a render.
        */
       queryClient.setQueryData([QueryKeys.filePreview, fileId], data);
+      void queryClient.invalidateQueries([QueryKeys.files]);
     },
   });
 };
@@ -189,6 +212,7 @@ export const useDeleteFilesMutation = (
   unknown // context
 > => {
   const queryClient = useQueryClient();
+  const setCitationPanel = useSetRecoilState(store.sgCitationPanel);
   const { showToast } = useToastContext();
   const localize = useLocalize();
   const { onSuccess, onError, ...options } = _options || {};
@@ -208,16 +232,38 @@ export const useDeleteFilesMutation = (
       onError?.(error, vars, context);
     },
     onSuccess: (data, vars, context) => {
+      const deletedIds = new Set([
+        ...vars.files.map((file) => file.file_id),
+        ...(data.deleted_file_ids ?? []),
+      ]);
       queryClient.setQueryData<t.TFile[] | undefined>([QueryKeys.files], (cachefiles) => {
-        const { files: filesDeleted } = vars;
-
-        const fileMap = filesDeleted.reduce((acc, file) => {
-          acc.set(file.file_id, file);
-          return acc;
-        }, new Map<string, t.BatchFile>());
-
-        return (cachefiles ?? []).filter((file) => !fileMap.has(file.file_id));
+        return (cachefiles ?? []).filter((file) => !deletedIds.has(file.file_id));
       });
+      if (data.deleted_file_ids?.length) {
+        setCitationPanel((current) => {
+          if (!current) return current;
+          const citations = current.metadata.citations.filter(
+            (citation) => !deletedIds.has(citation.file_id),
+          );
+          if (citations.length === current.metadata.citations.length) return current;
+          if (!citations.length) return null;
+          return {
+            ...current,
+            metadata: { ...current.metadata, citations },
+            selectedCitationId: citations.some(
+              (citation) => citation.citation_id === current.selectedCitationId,
+            )
+              ? current.selectedCitationId
+              : citations[0].citation_id,
+          };
+        });
+        queryClient.removeQueries({
+          predicate: (query) =>
+            sgResourceQueryKeys.has(String(query.queryKey[0])) &&
+            deletedIds.has(String(query.queryKey[1])),
+        });
+        void queryClient.invalidateQueries([QueryKeys.messages]);
+      }
 
       showToast({
         message: localize('com_ui_delete_success'),

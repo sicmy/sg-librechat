@@ -27,6 +27,7 @@ import React from 'react';
 import { renderHook, act } from '@testing-library/react';
 import { useRecoilValue } from 'recoil';
 import { Constants, LocalStorageKeys } from 'librechat-data-provider';
+import type { ExtendedFile } from '~/common';
 import { useChatFormContext } from '~/Providers';
 import { useGetFiles } from '~/data-provider';
 import { encodeBase64, getAskAnswerDraftId, getDraft, setDraft } from '~/utils';
@@ -53,6 +54,50 @@ beforeEach(() => {
 });
 
 describe('useAutoSave — conversation switching', () => {
+  it('does not restore draft references absent from the authenticated file list', () => {
+    const key = `${LocalStorageKeys.FILES_DRAFT}foreign-reference`;
+    localStorage.setItem(key, JSON.stringify(['unowned-file']));
+    const textAreaRef = makeTextAreaRef();
+    const { result } = renderHook(() => {
+      const [files, setFiles] = React.useState<Map<string, ExtendedFile>>(() => new Map());
+      useAutoSave({ conversationId: 'foreign-reference', textAreaRef, files, setFiles });
+      return files;
+    });
+    expect(result.current.size).toBe(0);
+    expect(localStorage.getItem(key)).toBeNull();
+  });
+  it('keeps file draft IDs until the authorized file list is loaded', () => {
+    const key = `${LocalStorageKeys.FILES_DRAFT}recovery-conversation`;
+    localStorage.setItem(key, JSON.stringify(['file-recovery']));
+    (useGetFiles as jest.Mock).mockReturnValue({ data: undefined });
+    const textAreaRef = makeTextAreaRef();
+    const { result, rerender } = renderHook(() => {
+      const [files, setFiles] = React.useState<Map<string, ExtendedFile>>(() => new Map());
+      useAutoSave({ conversationId: 'recovery-conversation', textAreaRef, files, setFiles });
+      return files;
+    });
+    expect(result.current.size).toBe(0);
+    expect(localStorage.getItem(key)).toBe(JSON.stringify(['file-recovery']));
+    (useGetFiles as jest.Mock).mockReturnValue({
+      data: [
+        {
+          file_id: 'file-recovery',
+          filename: 'recovery.txt',
+          bytes: 42,
+          status: 'pending',
+        },
+      ],
+    });
+    act(() => rerender());
+    expect(result.current.get('file-recovery')).toMatchObject({
+      filename: 'recovery.txt',
+      status: 'pending',
+      attached: true,
+    });
+    expect(localStorage.getItem(key)).toBe(JSON.stringify(['file-recovery']));
+    localStorage.removeItem(key);
+  });
+
   it('clears the textarea when switching to a conversation with no draft', () => {
     const { rerender } = renderHook(
       ({ conversationId }: { conversationId: string }) =>

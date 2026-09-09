@@ -535,6 +535,68 @@ describe('BaseClient', () => {
   });
 
   describe('sendMessage', () => {
+    test('waits for user persistence and the SG response checkpoint before dispatch', async () => {
+      const saving = deferred();
+      const saveStarted = deferred();
+      const checkpoint = deferred();
+      const checkpointStarted = deferred();
+      jest.spyOn(TestClient, 'saveMessageToDatabase').mockImplementation(async (message) => {
+        if (message.isCreatedByUser) {
+          saveStarted.resolve();
+          await saving.promise;
+        }
+        return { message };
+      });
+      TestClient.sgArtifactSink = {
+        begin: jest.fn(async () => {
+          checkpointStarted.resolve();
+          await checkpoint.promise;
+        }),
+        cancel: jest.fn(),
+      };
+      const completion = jest.spyOn(TestClient, 'sendCompletion');
+      const responsePromise = TestClient.sendMessage('Create an image: synthetic test.', {
+        user: {},
+      });
+      await saveStarted.promise;
+      expect(TestClient.sgArtifactSink.begin).not.toHaveBeenCalled();
+      expect(completion).not.toHaveBeenCalled();
+      saving.resolve();
+      await checkpointStarted.promise;
+      expect(completion).not.toHaveBeenCalled();
+      checkpoint.resolve();
+      const response = await responsePromise;
+      expect(TestClient.sgArtifactSink.begin).toHaveBeenCalledWith(
+        expect.objectContaining({ responseMessageId: response.messageId }),
+      );
+      expect(completion).toHaveBeenCalledTimes(1);
+    });
+
+    test('does not dispatch when a required SG checkpoint cannot be saved', async () => {
+      TestClient.sgArtifactSink = {
+        begin: jest.fn().mockRejectedValue(new Error('checkpoint-write-failed')),
+      };
+      const completion = jest.spyOn(TestClient, 'sendCompletion');
+      await expect(
+        TestClient.sendMessage('Create an image: synthetic test.', { user: {} }),
+      ).rejects.toThrow('checkpoint-write-failed');
+      expect(completion).not.toHaveBeenCalled();
+    });
+
+    test('SG cancellation during checkpoint persistence prevents provider dispatch', async () => {
+      const abortController = new AbortController();
+      TestClient.sgArtifactSink = {
+        begin: jest.fn(async () => abortController.abort()),
+        cancel: jest.fn().mockResolvedValue(),
+      };
+      const completion = jest.spyOn(TestClient, 'sendCompletion');
+      await expect(
+        TestClient.sendMessage('Create an image: synthetic test.', { user: {}, abortController }),
+      ).rejects.toThrow('sg_generation_aborted');
+      expect(TestClient.sgArtifactSink.cancel).toHaveBeenCalledTimes(1);
+      expect(completion).not.toHaveBeenCalled();
+    });
+
     test('sendMessage should return a response message', async () => {
       const expectedResult = expect.objectContaining({
         sender: TestClient.sender,

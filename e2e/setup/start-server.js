@@ -215,6 +215,24 @@ function startServer() {
     .then(requireRedisStreams)
     .then(async () => {
       require(path.resolve(__dirname, '../../api/server/index.js'));
+      if (process.env.E2E_DELIVERY_FAULTS === 'true') {
+        require('./delivery-faults.cjs')(require(path.resolve(__dirname, '../../api/models')));
+      }
+      if (process.env.E2E_FILE_DELETION_FAULTS === 'true') {
+        require('./deletion-faults.cjs')(require(path.resolve(__dirname, '../../api/models')));
+      }
+      if (process.env.E2E_DELETION_CRASH === 'true') {
+        require('./crash-deletion.cjs')(require(path.resolve(__dirname, '../../api/models')));
+      }
+      if (process.env.E2E_TERMINAL_DELETION === 'true') {
+        require('./terminal-deletion.cjs')(require(path.resolve(__dirname, '../../api/models')));
+      }
+      if (process.env.E2E_STALE_JOB === 'true') {
+        require('./stale-job.cjs')(require(path.resolve(__dirname, '../../api/models')));
+      }
+      if (process.env.E2E_SG_EXPIRY === 'true') {
+        require('./expiry-fixture.cjs')(require(path.resolve(__dirname, '../../api/models')));
+      }
       await verifyRedisStreams();
     })
     .catch((error) => {

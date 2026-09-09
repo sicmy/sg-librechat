@@ -22,6 +22,8 @@ export enum FileSources {
 export type SGFileState = 'UPLOADED' | 'PROCESSING' | 'READY' | 'FAILED';
 
 export type SGFileMetadata = {
+  sourceFileId?: string;
+  requestMessageId?: string;
   endpoint: string;
   jobId: string;
   conversationId: string;
@@ -199,6 +201,7 @@ export type TFileUpload = TFile & {
  * side so existing attachments keep rendering normally.
  */
 export type TFilePreview = {
+  sgGateway?: SGFileMetadata;
   file_id: string;
   status: 'pending' | 'ready' | 'failed';
   text?: string;
@@ -263,6 +266,7 @@ export type TFilesUsageResponse = {
 };
 
 export type DeleteFilesResponse = {
+  deleted_file_ids?: string[];
   message: string;
   result: Record<string, unknown>;
 };

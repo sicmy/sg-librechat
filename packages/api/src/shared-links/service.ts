@@ -297,13 +297,15 @@ export async function deleteSharedLinkWithCleanup(
 export async function deleteConvoSharedLinksWithCleanup(
   user: string,
   conversationId: string,
+  strict = false,
 ): Promise<{ message: string; deletedCount: number }> {
   const SharedLink = mongoose.models.SharedLink as Model<ISharedLink>;
   const links = await SharedLink.find({ user, conversationId }).select('_id').lean();
   const ids = links.map((l) => l._id);
+  if (strict && ids.length > 0) await cleanupBulkSharedLinkPermissions(ids);
   const result = await SharedLink.deleteMany({ user, conversationId });
 
-  if (ids.length > 0) {
+  if (!strict && ids.length > 0) {
     cleanupBulkSharedLinkPermissions(ids).catch((err) => {
       logger.error('[deleteConvoSharedLinksWithCleanup] ACL cleanup failed', {
         conversationId,

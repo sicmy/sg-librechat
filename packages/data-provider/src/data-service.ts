@@ -470,6 +470,10 @@ export const retryFileProcessing = (fileId: string): Promise<f.TFilePreview> => 
   return request.post(endpoints.fileRetry(fileId));
 };
 
+export const cancelFileProcessing = (fileId: string): Promise<f.TFilePreview> => {
+  return request.post(endpoints.fileCancel(fileId));
+};
+
 /** Preview status for a snapshotted file served through a shared link. */
 export const getSharedFilePreview = (shareId: string, fileId: string): Promise<f.TFilePreview> => {
   return request.get(endpoints.sharedFilePreview(shareId, fileId));
@@ -796,6 +800,30 @@ export const getSGCitationPage = async (
   return request.getResponse(endpoints.sgCitationPage(fileId, pageNumber), {
     responseType: 'blob',
     headers: { Accept: 'image/png' },
+  });
+};
+
+export const getSGCitationImage = async (fileId: string): Promise<AxiosResponse<Blob>> => {
+  return request.getResponse(endpoints.sgCitationImage(fileId), {
+    responseType: 'blob',
+    headers: { Accept: 'image/png' },
+  });
+};
+
+export const getSGCitationFrame = async (
+  fileId: string,
+  frameNumber: number,
+): Promise<AxiosResponse<Blob>> => {
+  return request.getResponse(endpoints.sgCitationFrame(fileId, frameNumber), {
+    responseType: 'blob',
+    headers: { Accept: 'image/png' },
+  });
+};
+
+export const getSGDocumentPreview = async (fileId: string): Promise<AxiosResponse<Blob>> => {
+  return request.getResponse(endpoints.sgDocumentPreview(fileId), {
+    responseType: 'blob',
+    headers: { Accept: 'application/pdf' },
   });
 };
 

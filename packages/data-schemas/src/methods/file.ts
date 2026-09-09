@@ -2,6 +2,10 @@ import { EToolResources, FileContext } from 'librechat-data-provider';
 import type { FilterQuery, SortOrder, Model } from 'mongoose';
 import type { IMongoFile } from '~/types/file';
 import { tenantSafeBulkWrite } from '~/utils/tenantBulkWrite';
+import { assertResourceWritable } from '~/utils/resourceWrite';
+import { excludeDeletedConversations } from '~/utils/resourceRead';
+import { getTenantId, SYSTEM_TENANT_ID } from '~/config/tenantContext';
+import { SG_UPLOAD_TTL_GRACE_MS } from '~/utils/uploadExpiry';
 import logger from '../config/winston';
 
 export type FileOwnerScope = {
@@ -29,11 +33,13 @@ function withOwnerScope<T extends FilterQuery<IMongoFile>>(
 
 /** Factory function that takes mongoose instance and returns the file methods */
 export function createFileMethods(mongoose: typeof import('mongoose')): {
+  prepareSGUploadExpiry: () => Promise<void>;
   findFileById: (file_id: string, options?: Record<string, unknown>) => Promise<IMongoFile | null>;
   getFiles: (
     filter: FilterQuery<IMongoFile>,
     _sortOptions?: Record<string, SortOrder> | null,
     selectFields?: Record<string, 0 | 1> | string | null,
+    options?: { includeDeleted?: boolean },
   ) => Promise<IMongoFile[] | null>;
   getExpiredFiles: (limit?: number, now?: Date) => Promise<IMongoFile[]>;
   getToolFilesByIds: (
@@ -68,6 +74,10 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
   }) => Promise<IMongoFile | null>;
   deleteFile: (file_id: string) => Promise<IMongoFile | null>;
   deleteFiles: (file_ids: string[], user?: string) => Promise<{ deletedCount?: number }>;
+  deleteOwnedFiles: (
+    file_ids: string[],
+    owner: FileOwnerScope,
+  ) => Promise<{ deletedCount?: number }>;
   deleteFileByFilter: (filter: FilterQuery<IMongoFile>) => Promise<IMongoFile | null>;
   batchUpdateFiles: (
     updates: Array<{
@@ -100,7 +110,13 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
     options: Record<string, unknown> = {},
   ): Promise<IMongoFile | null> {
     const File = mongoose.models.File as Model<IMongoFile>;
-    return File.findOne({ file_id, ...options }).lean<IMongoFile>();
+    const filter = File.find({ file_id, ...options }).cast(File);
+    const rows = await File.aggregate<IMongoFile>([
+      { $match: filter },
+      ...excludeDeletedConversations(true),
+      { $limit: 1 },
+    ]);
+    return rows[0] ?? null;
   }
 
   /** Select fields for query projection - 0 to exclude, 1 to include */
@@ -118,6 +134,7 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
     filter: FilterQuery<IMongoFile>,
     _sortOptions?: Record<string, SortOrder> | null,
     selectFields?: string | Record<string, 0 | 1> | null | undefined,
+    options: { includeDeleted?: boolean } = {},
   ): Promise<IMongoFile[] | null> {
     const File = mongoose.models.File as Model<IMongoFile>;
     const sortOptions = { updatedAt: -1 as SortOrder, ..._sortOptions };
@@ -127,15 +144,49 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
     } else {
       query.select({ text: 0 });
     }
-    return await query.sort(sortOptions).lean<IMongoFile[]>();
+    if (options.includeDeleted) return await query.sort(sortOptions).lean<IMongoFile[]>();
+    const projection = query.projection();
+    return File.aggregate<IMongoFile>([
+      { $match: query.cast(File) },
+      {
+        $sort: Object.fromEntries(
+          Object.entries(sortOptions).map(([key, value]) => [
+            key,
+            value === 1 || value === 'asc' || value === 'ascending' ? 1 : -1,
+          ]),
+        ),
+      },
+      ...excludeDeletedConversations(true),
+      ...(projection && Object.keys(projection).length ? [{ $project: projection }] : []),
+    ]);
   }
 
   async function getExpiredFiles(limit = 100, now: Date = new Date()): Promise<IMongoFile[]> {
     const File = mongoose.models.File as Model<IMongoFile>;
-    return await File.find({ expiredAt: { $ne: null, $lte: now } })
+    return await File.find({
+      $or: [
+        { expiredAt: { $ne: null, $lte: now } },
+        {
+          source: 'sg_gateway',
+          sgUploadExpiresAt: { $ne: null, $lte: new Date(now.getTime() - SG_UPLOAD_TTL_GRACE_MS) },
+        },
+      ],
+    })
       .sort({ expiredAt: 1 })
       .limit(limit)
       .lean<IMongoFile[]>();
+  }
+
+  async function prepareSGUploadExpiry(): Promise<void> {
+    if (getTenantId() !== SYSTEM_TENANT_ID) throw new Error('system_scope_required');
+    const File = mongoose.models.File as Model<IMongoFile>;
+    await File.updateMany(
+      { source: 'sg_gateway', expiresAt: { $type: 'date' } },
+      { $rename: { expiresAt: 'sgUploadExpiresAt' } },
+      { timestamps: false },
+    );
+    // eslint-disable-next-line no-restricted-syntax -- System-only index DDL has no tenant document operation.
+    await File.collection.createIndex({ source: 1, sgUploadExpiresAt: 1 });
   }
 
   /**
@@ -350,7 +401,8 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
   }
 
   /**
-   * Creates a new file with a TTL of 1 hour.
+   * Creates an upload hold one hour ahead; SG storage is cleaned by the application,
+   * while other sources retain MongoDB TTL. Both retain the existing one-hour grace.
    * @param data - The file data to be created, must contain file_id
    * @param disableTTL - Whether to disable the TTL
    * @returns A promise that resolves to the created file document
@@ -367,12 +419,49 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
 
     if (disableTTL) {
       delete fileData.expiresAt;
+      delete fileData.sgUploadExpiresAt;
+    } else if (data.source === 'sg_gateway') {
+      fileData.sgUploadExpiresAt = fileData.expiresAt;
+      delete fileData.expiresAt;
     }
 
-    return File.findOneAndUpdate({ file_id: data.file_id }, fileData, {
+    const scope =
+      data.user && data.file_id
+        ? {
+            userId: String(data.user),
+            conversationIds: [
+              ...new Set(
+                [data.conversationId, data.metadata?.sgGateway?.conversationId].filter(
+                  (id): id is string => !!id,
+                ),
+              ),
+            ],
+            fileIds: [
+              data.file_id,
+              ...(data.metadata?.sgGateway?.sourceFileId
+                ? [data.metadata.sgGateway.sourceFileId]
+                : []),
+            ],
+            requestMessageId: data.metadata?.sgGateway?.requestMessageId,
+          }
+        : undefined;
+    if (scope) await assertResourceWritable(mongoose, scope);
+    const update =
+      data.source === 'sg_gateway'
+        ? {
+            $set: fileData,
+            $unset: { expiresAt: '', ...(disableTTL ? { sgUploadExpiresAt: '' } : {}) },
+          }
+        : fileData;
+    const result = await File.findOneAndUpdate({ file_id: data.file_id }, update, {
       new: true,
       upsert: true,
     }).lean<IMongoFile>();
+    if (scope)
+      await assertResourceWritable(mongoose, scope, async () => {
+        await File.deleteOne({ file_id: data.file_id, user: data.user });
+      });
+    return result;
   }
 
   /**
@@ -423,7 +512,7 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
     const { file_id, inc = 1, user, tenantId } = data;
     const updateOperation = {
       $inc: { usage: inc },
-      $unset: { expiresAt: '', temp_file_id: '' },
+      $unset: { expiresAt: '', sgUploadExpiresAt: '', temp_file_id: '' },
     };
     // Owner scoping is fail-closed: mismatches leave usage and TTL metadata unchanged.
     const query: FilterQuery<IMongoFile> = user
@@ -470,6 +559,16 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
       deleteQuery = { user: user };
     }
     return File.deleteMany(deleteQuery);
+  }
+
+  async function deleteOwnedFiles(
+    file_ids: string[],
+    owner: FileOwnerScope,
+  ): Promise<{ deletedCount?: number }> {
+    if (!owner.userId) throw new Error('file_owner_required');
+    if (!file_ids.length) return { deletedCount: 0 };
+    const File = mongoose.models.File as Model<IMongoFile>;
+    return File.deleteMany(withOwnerScope({ file_id: { $in: file_ids } }, owner));
   }
 
   /**
@@ -556,7 +655,7 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
    * `min(now + renewMs, createdAt + maxLifetimeMs)`.
    *
    * A renewable hold, not a release: unlike `updateFileUsage` this never
-   * unsets `expiresAt`, so a file that is held but never actually sent is
+   * unsets `expiresAt` (or SG's `sgUploadExpiresAt`), so a file held but never sent is
    * still reaped once the hold lapses. Candidates are read first, then each
    * doc gets a guarded write — no aggregation-pipeline update, which Amazon
    * DocumentDB rejects. Four properties hold by construction, which is what
@@ -601,28 +700,35 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
     const filter = withOwnerScope(
       {
         file_id: { $in: [...new Set(fileIds)] },
-        expiresAt: { $exists: true },
+        $or: [
+          { expiresAt: { $exists: true } },
+          { source: 'sg_gateway', sgUploadExpiresAt: { $exists: true } },
+        ],
         createdAt: { $exists: true },
       },
       { userId: owner.user, tenantId: owner.tenantId },
     );
     const renewUntil = Date.now() + renewMs;
     const candidates = await File.find(filter)
-      .select({ _id: 1, expiresAt: 1, createdAt: 1 })
-      .lean<Pick<IMongoFile, '_id' | 'expiresAt' | 'createdAt'>[]>();
+      .select({ _id: 1, expiresAt: 1, sgUploadExpiresAt: 1, source: 1, createdAt: 1 })
+      .lean<
+        Pick<IMongoFile, '_id' | 'expiresAt' | 'sgUploadExpiresAt' | 'source' | 'createdAt'>[]
+      >();
     const holdOps = candidates.flatMap((file) => {
-      if (!file.createdAt || !file.expiresAt) {
+      const expiryField = file.source === 'sg_gateway' ? 'sgUploadExpiresAt' : 'expiresAt';
+      const expiry = file[expiryField];
+      if (!file.createdAt || !expiry) {
         return [];
       }
       const next = new Date(Math.min(renewUntil, file.createdAt.getTime() + maxLifetimeMs));
-      if (file.expiresAt.getTime() >= next.getTime()) {
+      if (expiry.getTime() >= next.getTime()) {
         return [];
       }
       return [
         {
           updateOne: {
-            filter: { _id: file._id, expiresAt: { $exists: true, $lt: next } },
-            update: { $set: { expiresAt: next } },
+            filter: { _id: file._id, [expiryField]: { $exists: true, $lt: next } },
+            update: { $set: { [expiryField]: next } },
           },
         },
       ];
@@ -670,6 +776,7 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
   }
 
   return {
+    prepareSGUploadExpiry,
     findFileById,
     getFiles,
     getExpiredFiles,
@@ -682,6 +789,7 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
     updateFileUsage,
     deleteFile,
     deleteFiles,
+    deleteOwnedFiles,
     deleteFileByFilter,
     batchUpdateFiles,
     updateFilesUsage,

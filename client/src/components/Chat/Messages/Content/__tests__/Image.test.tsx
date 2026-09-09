@@ -11,6 +11,10 @@ jest.mock('~/utils', () => ({
 }));
 
 const mockGetAuthenticatedImage = jest.fn();
+let mockPreviewStatus = 'ready';
+jest.mock('~/data-provider/Files/queries', () => ({
+  useFilePreview: () => ({ data: { status: mockPreviewStatus } }),
+}));
 jest.mock('librechat-data-provider', () => ({
   apiBaseUrl: () => '',
   dataService: {
@@ -39,6 +43,7 @@ describe('Image', () => {
   beforeEach(() => {
     _resetImageCaches();
     jest.clearAllMocks();
+    mockPreviewStatus = 'ready';
   });
 
   it('loads SG proxy images through an authenticated blob request', async () => {
@@ -49,7 +54,8 @@ describe('Image', () => {
     Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL });
     Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL });
     mockGetAuthenticatedImage.mockResolvedValue({ data: new Blob(['png']) });
-    const { unmount } = render(
+    mockPreviewStatus = 'pending';
+    const { unmount, rerender } = render(
       <Image
         imagePath="/api/files/sg-image/file_image"
         altText="Gateway image"
@@ -58,6 +64,16 @@ describe('Image', () => {
       />,
     );
 
+    expect(mockGetAuthenticatedImage).not.toHaveBeenCalled();
+    mockPreviewStatus = 'ready';
+    rerender(
+      <Image
+        imagePath="/api/files/sg-image/file_image"
+        altText="Gateway image"
+        width={640}
+        height={480}
+      />,
+    );
     await waitFor(() => expect(screen.getByRole('img')).toHaveAttribute('src', 'blob:sg-image'));
     expect(mockGetAuthenticatedImage).toHaveBeenCalledWith('/api/files/sg-image/file_image');
 

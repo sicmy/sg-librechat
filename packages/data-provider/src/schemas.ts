@@ -912,10 +912,18 @@ export const sgTypedCitationSchema = z
         message: 'Citation download path must match its file ID',
       });
     }
-    const expectedPreview =
-      citation.mime_type === 'application/pdf' && citation.locator.kind === 'page'
-        ? `/internal/files/${citation.file_id}/pages/${citation.locator.page_number}`
-        : null;
+    let expectedPreview: string | null = null;
+    if (citation.mime_type === 'application/pdf' && citation.locator.kind === 'page') {
+      expectedPreview = `/internal/files/${citation.file_id}/pages/${citation.locator.page_number}`;
+    } else if (citation.mime_type.startsWith('image/') && citation.locator.kind === 'image') {
+      expectedPreview = `/internal/files/${citation.file_id}/image`;
+    } else if (
+      citation.mime_type.startsWith('video/') &&
+      citation.locator.kind === 'timestamp' &&
+      citation.locator.frame_number != null
+    ) {
+      expectedPreview = `/internal/files/${citation.file_id}/frames/${citation.locator.frame_number}`;
+    }
     if ((citation.preview_path ?? null) !== expectedPreview) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
@@ -940,6 +948,78 @@ export const sgCitationMetadataSchema = z
 export type SGCitationLocator = z.infer<typeof sgCitationLocatorSchema>;
 export type SGTypedCitation = z.infer<typeof sgTypedCitationSchema>;
 export type SGCitationMetadata = z.infer<typeof sgCitationMetadataSchema>;
+
+export const sgArtifactMetadataSchema = z
+  .object({
+    schema_version: z.literal(1),
+    artifacts: z
+      .array(
+        z
+          .object({
+            schema_version: z.literal(1),
+            file_id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/),
+            job_id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/),
+            source_file_id: z
+              .string()
+              .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/)
+              .nullable()
+              .optional(),
+            conversation_id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/),
+            display_name: z.string().min(1).max(1024),
+            mime_type: z.enum(['image/png', 'audio/wav']),
+            spoken_text: z.string().max(1200).nullable().optional(),
+            size_bytes: z.number().int().positive().max(16777216),
+            sha256: z.string().regex(/^[a-f0-9]{64}$/),
+            preview_path: z.string(),
+            download_path: z.string(),
+          })
+          .strict()
+          .refine(
+            (artifact) =>
+              artifact.preview_path ===
+                (artifact.mime_type === 'audio/wav'
+                  ? `/internal/files/${artifact.file_id}/download`
+                  : `/internal/files/${artifact.file_id}/image`) &&
+              (artifact.mime_type !== 'audio/wav' || artifact.source_file_id == null) &&
+              artifact.download_path === `/internal/files/${artifact.file_id}/download`,
+          ),
+      )
+      .min(1)
+      .max(1),
+  })
+  .strict();
+
+export type SGArtifactMetadata = z.infer<typeof sgArtifactMetadataSchema>;
+
+const sgDeletionId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
+export const sgFileDeletionReportSchema = z
+  .object({
+    schema_version: z.literal(1),
+    file_id: sgDeletionId,
+    conversation_id: sgDeletionId,
+    deleted_file_ids: z.array(sgDeletionId).min(1),
+    request_message_ids: z.array(sgDeletionId),
+  })
+  .strict()
+  .refine(
+    (report) =>
+      report.deleted_file_ids.includes(report.file_id) &&
+      new Set(report.deleted_file_ids).size === report.deleted_file_ids.length &&
+      new Set(report.request_message_ids).size === report.request_message_ids.length,
+  );
+export type SGFileDeletionReport = z.infer<typeof sgFileDeletionReportSchema>;
+
+export const sgGenerationReceiptSchema = z
+  .object({
+    schema_version: z.literal(1),
+    requestMessageId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/),
+    responseMessageId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/),
+    provider: z.string().min(1).max(256),
+    kind: z.enum(['image', 'image_edit', 'tts']),
+    state: z.enum(['pending', 'cancelled', 'delivered']),
+  })
+  .strict();
+export type SGGenerationReceipt = z.infer<typeof sgGenerationReceiptSchema>;
 
 export const tExampleSchema = z.object({
   input: z.object({
@@ -994,6 +1074,8 @@ export const tMessageSchema = z.object({
     .object({
       sgEffort: z.enum(['low', 'high', 'max']).optional(),
       sgCitations: sgCitationMetadataSchema.optional(),
+      sgArtifacts: sgArtifactMetadataSchema.optional(),
+      sgGeneration: sgGenerationReceiptSchema.optional(),
     })
     .catchall(z.unknown())
     .optional(),

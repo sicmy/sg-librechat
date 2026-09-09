@@ -26,6 +26,12 @@ const {
   agentStartupIngressMiddleware,
   agentStartupTelemetryMiddleware,
   initializeFileStorage,
+  startSGFileDeletionWorker,
+  resumeSGConversationDeletion,
+  reconcileSGDeletion,
+  sweepSGExpiredConversations,
+  sweepSGExpiredMessages,
+  runSGSearchCleanup,
   initializeDeploymentSkills,
   initializeDeploymentPlugins,
   getDeploymentPluginSkills,
@@ -132,6 +138,12 @@ const startServer = async () => {
     axios.defaults.headers.common['Accept-Encoding'] = 'gzip';
   }
   await connectDb();
+  await runAsSystem(() => require('~/models').prepareConversationExpiryIndex());
+  await runAsSystem(() => require('~/models').prepareMessageExpiryIndex());
+  await runAsSystem(() => require('~/models').prepareSGUploadExpiry());
+  await runAsSystem(() =>
+    require('@librechat/data-schemas').prepareLifecycleIndexes(require('mongoose')),
+  );
 
   logger.info('Connected to MongoDB');
   indexSync().catch((err) => {
@@ -177,6 +189,42 @@ const startServer = async () => {
   });
   initializeGitHubSkillSync(appConfig);
   startExpiredFileSweep({ appConfig, loadAppConfig: getAppConfig });
+  registerShutdownTask(
+    'SG file deletion worker',
+    startSGFileDeletionWorker({
+      methods: require('~/models'),
+      cleanupSearch: async () => {
+        const { Message, Conversation } = require('mongoose').models;
+        await runSGSearchCleanup([Message, Conversation]);
+      },
+      expireConversations: async () => {
+        const messages = await sweepSGExpiredMessages({
+          methods: require('~/models'),
+          loadConfig: (tenantId) => getAppConfig({ tenantId }),
+        });
+        if (messages.failed > 0) logger.warn('Message expiry cleanup deferred');
+        const result = await sweepSGExpiredConversations({
+          methods: require('~/models'),
+          loadConfig: (tenantId) => getAppConfig({ tenantId }),
+        });
+        if (result.failed > 0) logger.warn('Conversation expiry cleanup deferred');
+      },
+      loadConfig: (tenantId) => getAppConfig({ tenantId }),
+      resumeConversation: async (job) => {
+        await resumeSGConversationDeletion({
+          job,
+          methods: require('~/models'),
+          loadConfig: () => getAppConfig({ tenantId: job.tenantId }),
+        });
+      },
+      reconcile: (job) =>
+        reconcileSGDeletion({
+          job,
+          methods: require('~/models'),
+          loadConfig: () => getAppConfig({ tenantId: job.tenantId }),
+        }),
+    }),
+  );
   // Register any programmatic tool-approval policy hooks declared in
   // `endpoints.agents.toolApproval.hooks`. Honor the `enabled` kill switch: when tool
   // approval is off we pass no hooks, so a disabled endpoint imports/runs nothing (and any

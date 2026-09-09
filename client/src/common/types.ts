@@ -630,6 +630,7 @@ export type TLoginLayoutContext = {
 };
 
 export type NewConversationParams = {
+  restoreFileDraft?: boolean;
   template?: Partial<t.TConversation>;
   preset?: Partial<t.TPreset>;
   modelsData?: t.TModelsConfig;

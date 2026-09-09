@@ -38,6 +38,8 @@ jest.mock('@librechat/api', () => ({
 
 jest.mock('~/models', () => ({
   saveMessage: (...args) => mockSaveMessage(...args),
+  isResourceWriteBlocked: jest.fn().mockResolvedValue(false),
+  getDeletedFileIds: jest.fn().mockResolvedValue([]),
 }));
 
 jest.mock('~/server/middleware', () => ({

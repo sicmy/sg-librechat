@@ -28,6 +28,7 @@ const {
   getStorageMetadata,
   sweepExpiredFiles: sweepExpiredFilesWithDeps,
   startExpiredFileSweep: startExpiredFileSweepWithDeps,
+  deleteExpiredSGFile,
 } = require('@librechat/api');
 const {
   convertImage,
@@ -38,7 +39,7 @@ const { addResourceFileId, deleteResourceFileId } = require('~/server/controller
 const { getOpenAIClient } = require('~/server/controllers/assistants/helpers');
 const { loadAuthValues } = require('~/server/services/Tools/credentials');
 const { getFileStrategy } = require('~/server/utils/getFileStrategy');
-const { checkCapability } = require('~/server/services/Config');
+const { checkCapability, getAppConfig } = require('~/server/services/Config');
 const { LB_QueueAsyncCall } = require('~/server/utils/queue');
 const { getRetentionExpiry, getAgentFileRetentionExpiry } = require('./retention');
 const { getStrategyFunctions } = require('./strategies');
@@ -339,6 +340,12 @@ const processDeleteRequest = async ({ req, files }) => {
 async function sweepExpiredFiles(options = {}) {
   return sweepExpiredFilesWithDeps(options, {
     getExpiredFiles: db.getExpiredFiles,
+    deleteExpiredSGFile: (file) =>
+      deleteExpiredSGFile({
+        file,
+        methods: db,
+        loadConfig: (tenantId) => getAppConfig({ tenantId }),
+      }),
     processDeleteRequest,
     logger,
   });

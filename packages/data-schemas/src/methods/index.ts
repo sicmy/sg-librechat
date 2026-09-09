@@ -1,4 +1,5 @@
 import type { RoleMethods, RoleDeps } from './role';
+import { createResourceDeletionMethods, type ResourceDeletionMethods } from './resourceDeletion';
 import { createSessionMethods, DEFAULT_REFRESH_TOKEN_EXPIRY, type SessionMethods } from './session';
 import { createUserMethods, DEFAULT_SESSION_EXPIRY, type UserMethods } from './user';
 import { createFileMethods, type FileMethods, type FileOwnerScope } from './file';
@@ -174,6 +175,7 @@ export type AllMethods = UserMethods &
   ConversationTagMethods &
   MessageMethods &
   ConversationMethods &
+  ResourceDeletionMethods &
   ChatProjectMethods &
   TxMethods &
   TransactionMethods &
@@ -280,6 +282,7 @@ export function createMethods(
   const agentMethods = createAgentMethods(mongoose, agentDeps);
 
   return {
+    ...createResourceDeletionMethods(mongoose),
     ...createUserMethods(mongoose, { getCache: deps.getCache }),
     ...createSessionMethods(mongoose),
     ...createTokenMethods(mongoose),
@@ -355,6 +358,7 @@ export type {
   ConversationTagMethods,
   MessageMethods,
   ConversationMethods,
+  ResourceDeletionMethods,
   ChatProjectMethods,
   TxMethods,
   TransactionMethods,

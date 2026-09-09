@@ -59,6 +59,7 @@ export interface IMessage extends Document {
   /** Verbatim excerpts the user quoted to reference on this turn. UI-only metadata for `MessageQuotes`. */
   quotes?: string[];
   expiredAt?: Date | null;
+  expiryReferencesOnly?: boolean;
   createdAt?: Date;
   updatedAt?: Date;
   tenantId?: string;

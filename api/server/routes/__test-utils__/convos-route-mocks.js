@@ -23,6 +23,15 @@ module.exports = {
     })),
     isSGFileGatewayEndpoint: jest.fn(() => true),
     deleteSGGatewayConversation: jest.fn(),
+    deleteSGConversationResources: jest.fn().mockResolvedValue(),
+    deleteSGConversations: jest.fn(),
+    SGFileGatewayError: class extends Error {
+      constructor(statusCode, code) {
+        super(code);
+        this.statusCode = statusCode;
+        this.code = code;
+      }
+    },
     ...overrides,
   }),
 
@@ -63,6 +72,9 @@ module.exports = {
   toolCallModel: () => ({ deleteToolCalls: jest.fn() }),
 
   sharedModels: () => ({
+    getConversationsForDeletion: jest.fn((_user, id) =>
+      Promise.resolve(id ? [id] : ['selected-conversation']),
+    ),
     getConvosByCursor: jest.fn(),
     getConvo: jest.fn(),
     deleteConvos: jest.fn(),

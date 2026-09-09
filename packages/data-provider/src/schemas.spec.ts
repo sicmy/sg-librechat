@@ -10,7 +10,54 @@ import {
   eReasoningEffortSchema,
   eReasoningModeSchema,
   eReasoningContextSchema,
+  sgTypedCitationSchema,
 } from './schemas';
+
+describe('sgTypedCitationSchema', () => {
+  it('accepts the scoped image preview path for an image locator', () => {
+    const citation = sgTypedCitationSchema.parse({
+      schema_version: 1,
+      citation_id: 'cite_image',
+      file_id: 'file_image',
+      display_name: 'safety-panel.png',
+      mime_type: 'image/png',
+      locator: {
+        kind: 'image',
+        image_id: 'file_image',
+        bbox: {
+          coordinate_space: 'normalized',
+          left: 0.18,
+          top: 0.05,
+          right: 0.41,
+          bottom: 0.57,
+        },
+      },
+      quote: 'The pressure needle is in the red danger zone.',
+      relevance_score: 0.98,
+      preview_path: '/internal/files/file_image/image',
+      download_path: '/internal/files/file_image/download',
+    });
+
+    expect(citation.preview_path).toBe('/internal/files/file_image/image');
+  });
+
+  it('rejects an image preview path that belongs to another file', () => {
+    expect(() =>
+      sgTypedCitationSchema.parse({
+        schema_version: 1,
+        citation_id: 'cite_image',
+        file_id: 'file_image',
+        display_name: 'safety-panel.png',
+        mime_type: 'image/png',
+        locator: { kind: 'image', image_id: 'file_image' },
+        quote: 'Visible evidence.',
+        relevance_score: 1,
+        preview_path: '/internal/files/file_other/image',
+        download_path: '/internal/files/file_image/download',
+      }),
+    ).toThrow('Citation preview path must match its typed locator');
+  });
+});
 
 describe('anthropicSettings', () => {
   describe('maxOutputTokens.reset()', () => {

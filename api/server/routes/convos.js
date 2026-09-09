@@ -3,22 +3,12 @@ const express = require('express');
 const { sleep } = require('@librechat/agents');
 const {
   isEnabled,
-  getCustomEndpointConfig,
-  isSGFileGatewayEndpoint,
-  deleteSGGatewayConversation,
-  deleteAgentCheckpoints,
+  deleteSGConversations,
   resolveImportMaxFileSize,
   restoreTenantContextFromReq,
-  deleteAllSharedLinksWithCleanup,
-  deleteConvoSharedLinksWithCleanup,
 } = require('@librechat/api');
 const { logger } = require('@librechat/data-schemas');
-const {
-  CacheKeys,
-  FileSources,
-  EModelEndpoint,
-  extractEnvVariable,
-} = require('librechat-data-provider');
+const { CacheKeys, EModelEndpoint } = require('librechat-data-provider');
 const {
   createImportLimiters,
   validateConvoAccess,
@@ -43,62 +33,16 @@ router.use(requireJwtAuth);
 const isValidProjectFilter = (projectId) =>
   !projectId || projectId === 'unassigned' || /^[a-f\d]{24}$/i.test(projectId);
 
-const deleteSGConversationFiles = async (req, conversationId) => {
-  const messages = await db.getMessages({ user: req.user.id, conversationId }, 'files', {
-    sort: false,
+const deleteConversations = async (req, conversationId) => {
+  const conversationIds = conversationId
+    ? [conversationId]
+    : await db.getConversationsForDeletion(req.user.id);
+  return deleteSGConversations({
+    userId: req.user.id,
+    conversationIds,
+    appConfig: req.config,
+    methods: db,
   });
-  const fileIds = [
-    ...new Set(
-      (messages ?? []).flatMap((message) =>
-        Array.isArray(message.files)
-          ? message.files.flatMap((file) => (file?.file_id ? [file.file_id] : []))
-          : [],
-      ),
-    ),
-  ];
-  if (fileIds.length === 0) {
-    return;
-  }
-  const files =
-    (await db.getFiles({
-      user: req.user.id,
-      source: FileSources.sg_gateway,
-      file_id: { $in: fileIds },
-    })) ?? [];
-  const scopes = new Map();
-  for (const file of files) {
-    const gateway = file.metadata?.sgGateway;
-    if (!gateway?.endpoint || !gateway.conversationId) {
-      continue;
-    }
-    const key = JSON.stringify([gateway.endpoint, gateway.conversationId]);
-    if (!scopes.has(key)) {
-      scopes.set(key, gateway);
-    }
-  }
-
-  for (const gateway of scopes.values()) {
-    const endpointConfig = getCustomEndpointConfig({
-      endpoint: gateway.endpoint,
-      appConfig: req.config,
-    });
-    if (!isSGFileGatewayEndpoint(endpointConfig)) {
-      throw new Error('SG Gateway conversation metadata is unavailable');
-    }
-    await deleteSGGatewayConversation({
-      endpointConfig: {
-        ...endpointConfig,
-        apiKey: extractEnvVariable(endpointConfig.apiKey),
-        baseURL: extractEnvVariable(endpointConfig.baseURL),
-      },
-      conversationId: gateway.conversationId,
-      tenantId: req.user.tenantId,
-      userId: req.user.id,
-      allowedAddresses: req.config?.endpoints?.allowedAddresses,
-    });
-  }
-
-  await Promise.all(files.map((file) => db.deleteFile(file.file_id)));
 };
 
 router.get('/', async (req, res) => {
@@ -195,6 +139,11 @@ router.delete('/', configMiddleware, async (req, res) => {
   } else if (source === 'button') {
     return res.status(200).send('No conversationId provided');
   }
+  if (typeof conversationId !== 'string' || !conversationId) {
+    return res
+      .status(400)
+      .json({ error: 'conversationId is required; use /all for bulk deletion' });
+  }
 
   if (
     typeof endpoint !== 'undefined' &&
@@ -211,37 +160,19 @@ router.delete('/', configMiddleware, async (req, res) => {
   }
 
   try {
-    if (filter.conversationId) {
-      await deleteSGConversationFiles(req, filter.conversationId);
-    }
-    const dbResponse = await db.deleteConvos(req.user.id, filter);
-    // HITL: prune the deleted conversations' durable checkpoints — a paused run's
-    // checkpoint would otherwise persist until the Mongo TTL. Never throws.
-    await deleteAgentCheckpoints(
-      dbResponse.conversationIds,
-      req.config?.endpoints?.[EModelEndpoint.agents]?.checkpointer,
-    );
-    if (filter.conversationId) {
-      await db.deleteToolCalls(req.user.id, filter.conversationId);
-      await deleteConvoSharedLinksWithCleanup(req.user.id, filter.conversationId);
-    }
+    const dbResponse = await deleteConversations(req, filter.conversationId);
     res.status(201).json(dbResponse);
   } catch (error) {
     logger.error('Error clearing conversations', error);
-    res.status(500).send('Error clearing conversations');
+    res
+      .status(error.code === 'invalid_api_key' ? 502 : (error.statusCode ?? 500))
+      .send('Error clearing conversations');
   }
 });
 
 router.delete('/all', configMiddleware, async (req, res) => {
   try {
-    const dbResponse = await db.deleteConvos(req.user.id, {});
-    // HITL: prune ALL the deleted conversations' durable checkpoints in one bulk pass.
-    await deleteAgentCheckpoints(
-      dbResponse.conversationIds,
-      req.config?.endpoints?.[EModelEndpoint.agents]?.checkpointer,
-    );
-    await db.deleteToolCalls(req.user.id);
-    await deleteAllSharedLinksWithCleanup(req.user.id);
+    const dbResponse = await deleteConversations(req);
     res.status(201).json(dbResponse);
   } catch (error) {
     logger.error('Error clearing conversations', error);

@@ -64,6 +64,7 @@ describe('getOpenAIConfig', () => {
 
     expect(result.llmConfig.modelKwargs).toMatchObject({ sg_internal: sgInternal });
     expect(result.llmConfig.__includeRawResponse).toBe(true);
+    expect(result.llmConfig.maxRetries).toBe(0);
   });
 
   it('should separate known and unknown params from addParams', () => {

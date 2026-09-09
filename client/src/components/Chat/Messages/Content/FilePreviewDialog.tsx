@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import copy from 'copy-to-clipboard';
 import { useRecoilValue } from 'recoil';
 import { Download } from 'lucide-react';
 import { OGDialog, OGDialogContent, OGDialogTitle, OGDialogDescription } from '@librechat/client';
-import { useFileDownload, useSharedFileDownload } from '~/data-provider';
+import { useFileDownload, useSharedFileDownload, useSGDocumentPreview } from '~/data-provider';
 import { logger, sortPagesByRelevance, triggerDownload } from '~/utils';
 import CopyButton from '~/components/Messages/Content/CopyButton';
 import { useShareContext } from '~/Providers';
@@ -21,6 +21,7 @@ interface FilePreviewDialogProps {
   pageRelevance?: Record<number, number>;
   fileType?: string;
   fileSize?: number;
+  fileSource?: string;
 }
 
 function getFileExtension(filename: string): string {
@@ -32,13 +33,16 @@ function canPreviewByMime(mime?: string): 'pdf' | 'text' | false {
   if (!mime) {
     return false;
   }
-  if (mime.includes('pdf')) {
+  mime = mime.split(';')[0].trim().toLowerCase();
+  if (mime === 'application/pdf') {
     return 'pdf';
   }
   if (
     mime.startsWith('text/') ||
-    mime.includes('json') ||
-    mime.includes('xml') ||
+    mime === 'application/json' ||
+    mime.endsWith('+json') ||
+    mime === 'application/xml' ||
+    mime.endsWith('+xml') ||
     mime.includes('javascript') ||
     mime.includes('typescript') ||
     mime.includes('yaml') ||
@@ -136,6 +140,7 @@ export default function FilePreviewDialog({
   pageRelevance,
   fileType,
   fileSize,
+  fileSource,
 }: FilePreviewDialogProps) {
   const localize = useLocalize();
   const user = useRecoilValue(store.user);
@@ -146,100 +151,93 @@ export default function FilePreviewDialog({
   // share path); otherwise fall back to the owner route.
   const useShared = !!shareId && (filePath?.startsWith('/api/share/') ?? false);
   const downloadFile = useShared ? downloadShared : downloadOwned;
+  const { refetch: previewDocument } = useSGDocumentPreview(fileId);
+  const isDocx = fileSource === 'sg_gateway' && !shareId && /\.docx$/i.test(fileName);
 
   const [fileContent, setFileContent] = useState<string | null>(null);
   const [fileBlobUrl, setFileBlobUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [previewError, setPreviewError] = useState(false);
+  const [downloadError, setDownloadError] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
-  const loadingRef = useRef(false);
 
-  const previewKind = canPreviewByMime(fileType) || canPreviewByExt(fileName);
+  const isOfficeDocument = /\.(docx?|odt|pptx?|odp|xlsx?|ods)$/i.test(fileName);
+  const previewKind = isDocx
+    ? 'pdf'
+    : !isOfficeDocument && (canPreviewByMime(fileType) || canPreviewByExt(fileName));
 
-  const cancelledRef = useRef(false);
-
-  const loadPreview = useCallback(async () => {
-    if (!fileId || !previewKind || loadingRef.current) {
-      return;
-    }
-    loadingRef.current = true;
-    cancelledRef.current = false;
-    setLoading(true);
+  useEffect(() => {
+    let cancelled = false;
+    let previewUrl: string | undefined;
+    setFileContent(null);
+    setFileBlobUrl(null);
     setPreviewError(false);
+    setDownloadError(false);
+    setIsCopied(false);
+    setLoading(open && !!fileId && !!previewKind);
+    if (!open || !fileId || !previewKind) return;
 
-    try {
-      const result = await downloadFile();
-      if (cancelledRef.current || !result.data) {
-        if (!cancelledRef.current) {
+    const loadPreview = async () => {
+      try {
+        let blob: Blob;
+        if (isDocx) {
+          const result = await previewDocument();
+          if (cancelled) return;
+          if (result.isError || !result.data) throw new Error('Document preview failed');
+          blob = result.data;
+        } else {
+          const result = await downloadFile();
+          if (cancelled) return;
+          if (result.isError || !result.data) throw new Error('Preview download failed');
+
+          const resp = await fetch(result.data);
+          if (!resp.ok) throw new Error('Preview content unavailable');
+          blob = await resp.blob();
+        }
+        if (cancelled) return;
+
+        if (previewKind === 'text') {
+          const text = await blob.text();
+          if (!cancelled) setFileContent(text);
+        } else {
+          const typed = new Blob([blob], { type: 'application/pdf' });
+          previewUrl = URL.createObjectURL(typed);
+          setFileBlobUrl(previewUrl);
+        }
+      } catch {
+        if (!cancelled) {
           setPreviewError(true);
         }
-        return;
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
-
-      const resp = await fetch(result.data);
-      const blob = await resp.blob();
-
-      if (cancelledRef.current) {
-        return;
-      }
-
-      if (previewKind === 'text') {
-        setFileContent(await blob.text());
-      } else {
-        const typed = new Blob([blob], { type: 'application/pdf' });
-        setFileBlobUrl(URL.createObjectURL(typed));
-      }
-    } catch {
-      if (!cancelledRef.current) {
-        setPreviewError(true);
-      }
-    } finally {
-      loadingRef.current = false;
-      if (!cancelledRef.current) {
-        setLoading(false);
-      }
-    }
-  }, [fileId, previewKind, downloadFile]);
+    };
+    void loadPreview();
+    return () => {
+      cancelled = true;
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [open, fileId, previewKind, downloadFile, isDocx, previewDocument]);
 
   const handleDownload = useCallback(async () => {
     if (!fileId) {
       return;
     }
     try {
+      setDownloadError(false);
       const result = await downloadFile();
-      if (!result.data) {
+      if (result.isError || !result.data) {
+        setDownloadError(true);
         return;
       }
       triggerDownload(result.data, fileName);
     } catch (err) {
+      setDownloadError(true);
       logger.error('[FilePreviewDialog] Download failed:', err);
     }
   }, [downloadFile, fileId, fileName]);
-
-  useEffect(() => {
-    if (open && previewKind && !fileContent && !fileBlobUrl) {
-      loadPreview();
-    }
-  }, [open, previewKind, fileContent, fileBlobUrl, loadPreview]);
-
-  useEffect(() => {
-    return () => {
-      if (fileBlobUrl) {
-        URL.revokeObjectURL(fileBlobUrl);
-      }
-    };
-  }, [fileBlobUrl]);
-
-  useEffect(() => {
-    if (!open) {
-      cancelledRef.current = true;
-      setFileContent(null);
-      setFileBlobUrl(null);
-      setPreviewError(false);
-      setLoading(false);
-      setIsCopied(false);
-    }
-  }, [open]);
 
   const handleCopy = useCallback(() => {
     if (!fileContent) {
@@ -294,6 +292,7 @@ export default function FilePreviewDialog({
         </div>
 
         <div className="relative min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-4">
+          {downloadError && <p role="alert">{localize('com_ui_download_error')}</p>}
           {loading && (
             <div className="flex h-60 items-center justify-center rounded-lg bg-surface-secondary">
               <span className="shimmer text-sm text-text-secondary">
@@ -304,7 +303,7 @@ export default function FilePreviewDialog({
           {previewError && (
             <div className="flex h-32 items-center justify-center rounded-lg bg-surface-secondary">
               <span className="text-sm text-text-secondary">
-                {localize('com_ui_preview_unavailable')}
+                {localize('com_ui_preview_load_error')}
               </span>
             </div>
           )}
@@ -315,7 +314,7 @@ export default function FilePreviewDialog({
               className="h-[70vh] w-full rounded-lg border border-border-light"
             />
           )}
-          {fileContent && (
+          {fileContent !== null && (
             <>
               <div className="pointer-events-none sticky top-0 z-10 flex justify-end pr-1">
                 <CopyButton

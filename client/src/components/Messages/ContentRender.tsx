@@ -12,6 +12,7 @@ import { revealOnRowHoverClasses, messageFooterClasses } from '~/components/Chat
 import { useAttachments, useLocalize, useMessageActions, useContentMetadata } from '~/hooks';
 import AuthorHeader from '~/components/Chat/Messages/Content/Parts/AuthorHeader';
 import CitationBadges from '~/components/Chat/Messages/Content/Citations/Badges';
+import GeneratedArtifacts from '~/components/Chat/Messages/Content/GeneratedArtifacts';
 import ContentParts from '~/components/Chat/Messages/Content/ContentParts';
 import SiblingSwitch from '~/components/Chat/Messages/SiblingSwitch';
 import HoverButtons from '~/components/Chat/Messages/HoverButtons';
@@ -205,6 +206,7 @@ const ContentRender = memo(function ContentRender({
         content={msg.content as Array<TMessageContentParts | undefined>}
       />
       {msg.isCreatedByUser === false && <CitationBadges message={msg} />}
+      {msg.isCreatedByUser === false && <GeneratedArtifacts message={msg} />}
     </MessageRow>
   );
 }, areContentRenderPropsEqual);

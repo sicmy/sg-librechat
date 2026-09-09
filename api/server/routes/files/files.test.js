@@ -14,7 +14,7 @@ const {
 } = require('librechat-data-provider');
 const { createAgent, createFile } = require('~/models');
 
-// Only mock the external dependencies that we don't want to test
+// Route tests mock service boundaries; lifecycle.spec.ts covers real Mongo cleanup.
 jest.mock('~/server/services/Files/process', () => ({
   processDeleteRequest: jest.fn().mockResolvedValue({ deletedFileIds: [], failedFileIds: [] }),
   filterFile: jest.fn(),
@@ -46,6 +46,10 @@ jest.mock('@librechat/api', () => ({
   ...jest.requireActual('@librechat/api'),
   refreshS3FileUrls: jest.fn(),
   deleteSGGatewayFile: jest.fn().mockResolvedValue(),
+  deleteSGFileResources: jest.fn(async ({ file, userId, methods }) => {
+    await methods.deleteOwnedFiles([file.file_id], { userId });
+    return [file.file_id];
+  }),
   downloadSGGatewayCitationFile: jest.fn(),
   getSGGatewayCitationPage: jest.fn(),
   getSGGatewayImage: jest.fn(),
@@ -70,7 +74,7 @@ jest.mock('~/config', () => ({
 const { processDeleteRequest } = require('~/server/services/Files/process');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 const {
-  deleteSGGatewayFile,
+  deleteSGFileResources,
   downloadSGGatewayCitationFile,
   getSGGatewayCitationPage,
   getSGGatewayImage,
@@ -242,6 +246,55 @@ describe('File Routes - Delete with Agent Access', () => {
   });
 
   describe('SG citation routes', () => {
+    it('serves a DOCX preview as PDF through the scoped adapter', async () => {
+      const sgFileId = `file_${uuidv4().replaceAll('-', '')}`;
+      await createFile({
+        user: otherUserId,
+        file_id: sgFileId,
+        filename: 'document.docx',
+        filepath: '',
+        bytes: 200,
+        source: FileSources.sg_gateway,
+        type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        metadata: {
+          sgGateway: {
+            endpoint: 'SG AI Gateway',
+            jobId: 'job-preview',
+            conversationId: 'conversation-preview',
+            state: 'READY',
+          },
+        },
+      });
+      downloadSGGatewayCitationFile.mockResolvedValue(Buffer.from('%PDF-preview'));
+      const response = await request(app).get(`/files/sg-citation/${sgFileId}/document-preview`);
+      expect(response.status).toBe(200);
+      expect(response.headers['content-type']).toMatch(/^application\/pdf/);
+      expect(response.headers['cache-control']).toBe('private, no-store');
+      expect(downloadSGGatewayCitationFile).toHaveBeenCalledWith(
+        expect.objectContaining({ documentPreview: true, userId: otherUserId.toString() }),
+      );
+    });
+
+    it.each(['citation', 'attachment'])('denies another owner through %s', async (entry) => {
+      const sgFileId = `file_${uuidv4().replaceAll('-', '')}`;
+      await createFile({
+        user: authorId,
+        file_id: sgFileId,
+        filename: 'private.pdf',
+        filepath: '',
+        bytes: 200,
+        type: 'application/pdf',
+        source: FileSources.sg_gateway,
+      });
+      const route =
+        entry === 'citation'
+          ? `/files/sg-citation/${sgFileId}/download`
+          : `/files/download/${authorId}/${sgFileId}`;
+      const response = await request(app).get(route);
+      expect([403, 404]).toContain(response.status);
+      expect(downloadSGGatewayCitationFile).not.toHaveBeenCalled();
+    });
+
     it('proxies an owned PDF page with private image headers', async () => {
       const sgFileId = `file_${uuidv4().replaceAll('-', '')}`;
       await createFile({
@@ -278,7 +331,7 @@ describe('File Routes - Delete with Agent Access', () => {
       );
     });
 
-    it('downloads only an owned SG file through the scoped Gateway adapter', async () => {
+    it.each(['citation', 'attachment'])('downloads an owned SG file through %s', async (entry) => {
       const sgFileId = `file_${uuidv4().replaceAll('-', '')}`;
       await createFile({
         user: otherUserId,
@@ -299,12 +352,19 @@ describe('File Routes - Delete with Agent Access', () => {
       });
       downloadSGGatewayCitationFile.mockResolvedValue(Buffer.from('original-pdf'));
 
-      const response = await request(app).get(`/files/sg-citation/${sgFileId}/download`);
+      const route =
+        entry === 'citation'
+          ? `/files/sg-citation/${sgFileId}/download`
+          : `/files/download/${otherUserId}/${sgFileId}`;
+      const response = await request(app).get(route);
 
       expect(response.status).toBe(200);
       expect(response.headers['content-type']).toMatch(/^application\/pdf/);
       expect(response.headers['content-disposition']).toContain('policy.pdf');
       expect(response.headers['cache-control']).toBe('private, no-store');
+      expect(JSON.parse(decodeURIComponent(response.headers['x-file-metadata'])).file_id).toBe(
+        sgFileId,
+      );
       expect(downloadSGGatewayCitationFile).toHaveBeenCalledWith(
         expect.objectContaining({
           userId: otherUserId.toString(),
@@ -395,7 +455,7 @@ describe('File Routes - Delete with Agent Access', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.message).toBe('Files deleted successfully');
-      expect(deleteSGGatewayFile).toHaveBeenCalledWith(
+      expect(deleteSGFileResources).toHaveBeenCalledWith(
         expect.objectContaining({
           userId: otherUserId.toString(),
           file: expect.objectContaining({ file_id: sgFileId }),

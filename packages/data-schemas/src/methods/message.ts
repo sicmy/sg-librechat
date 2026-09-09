@@ -1,20 +1,65 @@
-import { RetentionMode } from 'librechat-data-provider';
-import type { DeleteResult, FilterQuery, Model } from 'mongoose';
-import type { AppConfig, IMessage } from '~/types';
+import {
+  RetentionMode,
+  sgGenerationReceiptSchema,
+  sgArtifactMetadataSchema,
+  sgCitationMetadataSchema,
+} from 'librechat-data-provider';
+import type { SGGenerationReceipt, SGArtifactMetadata } from 'librechat-data-provider';
+import type { DeleteResult, FilterQuery, Model, PipelineStage } from 'mongoose';
+import type { AppConfig, IMessage, IConversation } from '~/types';
 import { createTempChatExpirationDate } from '~/utils/tempChatRetention';
-import { createFallbackRetentionDate } from '~/utils/retention';
+import { activeExpirationFilter, createFallbackRetentionDate } from '~/utils/retention';
 import { tenantSafeBulkWrite } from '~/utils/tenantBulkWrite';
+import {
+  assertResourceWritable,
+  conversationBatchScopes,
+  assertConversationBatchWritable,
+  resourceBatchTenantFilter,
+} from '~/utils/resourceWrite';
+import { excludeDeletedConversations } from '~/utils/resourceRead';
+import { redactDeletedFileReferences } from '~/utils/resourceReferences';
 import logger from '~/config/winston';
+import { compactExpiredMessages, getExpiredOrphanMessageScopes } from './messageExpiry';
+import type { MessageExpiryResult, ExpiredMessageScope } from './messageExpiry';
+import { prepareRetentionIndex } from '~/utils/retentionIndex';
 
 /** Simple UUID v4 regex to replace zod validation */
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface MessageQueryOptions {
+  includeDeleted?: boolean;
   limit?: number;
   sort?: Record<string, 1 | -1> | false;
 }
 
 export interface MessageMethods {
+  compactExpiredMessages(limit?: number, now?: Date): Promise<MessageExpiryResult>;
+  getExpiredOrphanMessageScopes(limit?: number, now?: Date): Promise<ExpiredMessageScope[]>;
+  prepareMessageExpiryIndex(): Promise<void>;
+  removeSGFileReferences(
+    userId: string,
+    conversationId: string,
+    fileIds: string[],
+    requestIds: string[],
+  ): Promise<void>;
+  finishSGGenerationMessage(args: {
+    userId: string;
+    conversationId: string;
+    receipt: SGGenerationReceipt;
+    artifacts: SGArtifactMetadata;
+  }): Promise<boolean>;
+  prepareSGGenerationMessage(args: {
+    userId: string;
+    conversationId: string;
+    receipt: SGGenerationReceipt;
+    endpoint: string;
+    sender: string;
+  }): Promise<SGGenerationReceipt>;
+  cancelSGGenerationMessage(
+    userId: string,
+    conversationId: string,
+    messageId: string,
+  ): Promise<void>;
   saveMessage(
     ctx: { userId: string; isTemporary?: boolean; interfaceConfig?: AppConfig['interfaceConfig'] },
     params: Partial<IMessage> & { newMessageId?: string },
@@ -75,6 +120,280 @@ export interface MessageMethods {
 }
 
 export function createMessageMethods(mongoose: typeof import('mongoose')): MessageMethods {
+  async function removeSGFileReferences(
+    userId: string,
+    conversationId: string,
+    fileIds: string[],
+    requestIds: string[],
+  ): Promise<void> {
+    if (!userId || !fileIds.length) throw new Error('invalid_file_cleanup_scope');
+    const Message = mongoose.models.Message as Model<IMessage>;
+    const ids = new Set(fileIds);
+    const requests = new Set(requestIds);
+    const filter = {
+      user: userId,
+      $or: [
+        { 'files.file_id': { $in: fileIds } },
+        { 'metadata.sgArtifacts.artifacts.file_id': { $in: fileIds } },
+        { 'metadata.sgArtifacts.artifacts.source_file_id': { $in: fileIds } },
+        { 'metadata.sgCitations.citations.file_id': { $in: fileIds } },
+        {
+          conversationId,
+          'metadata.sgGeneration.requestMessageId': { $in: requestIds },
+          $or: [
+            { 'metadata.sgGeneration.state': { $ne: 'cancelled' } },
+            { 'metadata.sgArtifacts': { $exists: true } },
+          ],
+        },
+      ],
+    };
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const messages = await Message.find(filter).lean();
+      if (!messages.length) return;
+      for (const message of messages) {
+        const metadata = { ...message.metadata };
+        const artifacts = sgArtifactMetadataSchema.safeParse(metadata.sgArtifacts);
+        const citations = sgCitationMetadataSchema.safeParse(metadata.sgCitations);
+        const generation = sgGenerationReceiptSchema.safeParse(metadata.sgGeneration);
+        const cancelledRequest =
+          generation.success &&
+          message.conversationId === conversationId &&
+          requests.has(generation.data.requestMessageId);
+        const messageIds = new Set(ids);
+        if (artifacts.success) {
+          for (const artifact of artifacts.data.artifacts) {
+            if (
+              cancelledRequest ||
+              ids.has(artifact.file_id) ||
+              ids.has(artifact.source_file_id ?? '')
+            )
+              messageIds.add(artifact.file_id);
+          }
+        }
+        if (artifacts.success) {
+          const retained = artifacts.data.artifacts.filter(
+            (item) => !messageIds.has(item.file_id) && !messageIds.has(item.source_file_id ?? ''),
+          );
+          if (retained.length) metadata.sgArtifacts = { ...artifacts.data, artifacts: retained };
+          else delete metadata.sgArtifacts;
+        } else delete metadata.sgArtifacts;
+        if (citations.success) {
+          const retained = citations.data.citations.filter((item) => !messageIds.has(item.file_id));
+          if (retained.length) metadata.sgCitations = { ...citations.data, citations: retained };
+          else delete metadata.sgCitations;
+        } else delete metadata.sgCitations;
+        if (
+          generation.success &&
+          message.conversationId === conversationId &&
+          requests.has(generation.data.requestMessageId)
+        ) {
+          metadata.sgGeneration = { ...generation.data, state: 'cancelled' };
+        }
+        const files = (message.files ?? []).filter(
+          (item) =>
+            !item ||
+            typeof item !== 'object' ||
+            !('file_id' in item) ||
+            typeof item.file_id !== 'string' ||
+            !messageIds.has(item.file_id),
+        );
+        await Message.updateOne(
+          {
+            user: userId,
+            messageId: message.messageId,
+            conversationId: message.conversationId,
+            updatedAt: message.updatedAt ?? { $exists: false },
+            metadata:
+              message.metadata === undefined ? { $exists: false } : { $eq: message.metadata },
+            files: message.files === undefined ? { $exists: false } : { $eq: message.files },
+          },
+          { $set: { metadata, files } },
+        );
+      }
+    }
+    if (await Message.exists(filter)) throw new Error('sg_file_reference_cleanup_conflict');
+  }
+  async function finishSGGenerationMessage({
+    userId,
+    conversationId,
+    receipt,
+    artifacts,
+  }: {
+    userId: string;
+    conversationId: string;
+    receipt: SGGenerationReceipt;
+    artifacts: SGArtifactMetadata;
+  }): Promise<boolean> {
+    const validated = sgGenerationReceiptSchema.parse(receipt);
+    const metadata = sgArtifactMetadataSchema.parse(artifacts);
+    if (
+      validated.state !== 'pending' ||
+      metadata.artifacts.some((file) => file.conversation_id !== conversationId)
+    ) {
+      return false;
+    }
+    const Message = mongoose.models.Message as Model<IMessage>;
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const writeScope = { userId, conversationIds: [conversationId] };
+    const artifactScope = {
+      ...writeScope,
+      requestMessageId: validated.requestMessageId,
+      fileIds: metadata.artifacts.flatMap((artifact) => [
+        artifact.file_id,
+        ...(artifact.source_file_id ? [artifact.source_file_id] : []),
+      ]),
+    };
+    await assertResourceWritable(mongoose, artifactScope);
+    const [conversation, parent] = await Promise.all([
+      Conversation.exists({ user: userId, conversationId }),
+      Message.exists({
+        user: userId,
+        conversationId,
+        messageId: validated.requestMessageId,
+        isCreatedByUser: true,
+      }),
+    ]);
+    if (!conversation || !parent) {
+      return false;
+    }
+    const text = {
+      tts: 'Speech generated.',
+      image_edit: 'Image edited.',
+      image: 'Image generated.',
+    }[validated.kind];
+    const result = await Message.updateOne(
+      {
+        user: userId,
+        conversationId,
+        messageId: validated.responseMessageId,
+        parentMessageId: validated.requestMessageId,
+        isCreatedByUser: false,
+        isTemporary: { $ne: true },
+        'metadata.sgGeneration': validated,
+        'metadata.sgArtifacts': { $exists: false },
+        $or: [{ expiredAt: null }, { expiredAt: { $gt: new Date() } }],
+      },
+      {
+        $set: {
+          'metadata.sgArtifacts': metadata,
+          'metadata.sgGeneration.state': 'delivered',
+          text,
+          content: [{ type: 'text', text }],
+          unfinished: false,
+          error: false,
+        },
+      },
+    );
+    await assertResourceWritable(mongoose, writeScope, async () => {
+      await Message.deleteMany({ user: userId, conversationId });
+    });
+    await assertResourceWritable(mongoose, artifactScope);
+    return result.modifiedCount === 1;
+  }
+  async function prepareSGGenerationMessage({
+    userId,
+    conversationId,
+    receipt,
+    endpoint,
+    sender,
+  }: {
+    userId: string;
+    conversationId: string;
+    receipt: SGGenerationReceipt;
+    endpoint: string;
+    sender: string;
+  }): Promise<SGGenerationReceipt> {
+    const validated = sgGenerationReceiptSchema.parse(receipt);
+    if (
+      !userId ||
+      !UUID_REGEX.test(conversationId) ||
+      validated.state !== 'pending' ||
+      validated.requestMessageId === validated.responseMessageId
+    ) {
+      throw new Error('sg_generation_invalid_receipt');
+    }
+    const Message = mongoose.models.Message as Model<IMessage>;
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const writeScope = { userId, conversationIds: [conversationId] };
+    await assertResourceWritable(mongoose, writeScope);
+    const [parent, conversation] = await Promise.all([
+      Message.findOne({
+        user: userId,
+        conversationId,
+        messageId: validated.requestMessageId,
+        isCreatedByUser: true,
+      }),
+      Conversation.exists({ user: userId, conversationId }),
+    ]);
+    if (
+      !parent ||
+      !conversation ||
+      parent.isTemporary ||
+      (parent.expiredAt != null && parent.expiredAt.getTime() <= Date.now())
+    ) {
+      throw new Error('sg_generation_parent_not_persisted');
+    }
+    const record = await Message.findOneAndUpdate(
+      { user: userId, messageId: validated.responseMessageId },
+      {
+        $setOnInsert: {
+          user: userId,
+          conversationId,
+          messageId: validated.responseMessageId,
+          parentMessageId: validated.requestMessageId,
+          endpoint,
+          sender,
+          model: 'default',
+          text: '',
+          content: [],
+          isCreatedByUser: false,
+          unfinished: true,
+          error: false,
+          expiredAt: parent.expiredAt,
+          metadata: { sgGeneration: validated },
+        },
+      },
+      { upsert: true, new: true },
+    );
+    const stored = sgGenerationReceiptSchema.safeParse(record?.metadata?.sgGeneration);
+    await assertResourceWritable(mongoose, writeScope, async () => {
+      await Message.deleteMany({ user: userId, conversationId });
+    });
+    if (
+      !record ||
+      record.conversationId !== conversationId ||
+      record.isCreatedByUser ||
+      record.parentMessageId !== validated.requestMessageId ||
+      !stored.success ||
+      stored.data.provider !== validated.provider ||
+      stored.data.requestMessageId !== validated.requestMessageId ||
+      stored.data.responseMessageId !== validated.responseMessageId ||
+      stored.data.kind !== validated.kind ||
+      stored.data.state !== 'pending'
+    ) {
+      throw new Error('sg_generation_receipt_conflict');
+    }
+    return stored.data;
+  }
+
+  async function cancelSGGenerationMessage(
+    userId: string,
+    conversationId: string,
+    messageId: string,
+  ): Promise<void> {
+    const Message = mongoose.models.Message as Model<IMessage>;
+    await Message.updateOne(
+      {
+        user: userId,
+        conversationId,
+        messageId,
+        isCreatedByUser: false,
+        'metadata.sgGeneration.responseMessageId': messageId,
+        'metadata.sgGeneration.state': 'pending',
+      },
+      { $set: { 'metadata.sgGeneration.state': 'cancelled', unfinished: true } },
+    );
+  }
   /**
    * Saves a message in the database.
    */
@@ -102,6 +421,9 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
       );
       return;
     }
+
+    const writeScope = { userId, conversationIds: [conversationId] };
+    await assertResourceWritable(mongoose, writeScope);
 
     try {
       const Message = mongoose.models.Message as Model<IMessage>;
@@ -162,7 +484,10 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
         message.isTemporary = false;
       }
 
-      return message.toObject();
+      await assertResourceWritable(mongoose, writeScope, async () => {
+        await Message.deleteMany({ user: userId, conversationId });
+      });
+      return (await getMessage({ user: userId, messageId: message.messageId })) ?? undefined;
     } catch (err: unknown) {
       logger.error('Error saving message:', err);
       logger.info(`---\`saveMessage\` context: ${metadata?.context}`);
@@ -179,7 +504,13 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
           });
 
           if (existingMessage) {
-            return existingMessage.toObject();
+            await assertResourceWritable(mongoose, writeScope, async () => {
+              await Message.deleteMany({ user: userId, conversationId });
+            });
+            return (
+              (await getMessage({ user: userId, messageId: existingMessage.messageId })) ??
+              undefined
+            );
           }
 
           return undefined;
@@ -204,15 +535,25 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
   ) {
     try {
       const Message = mongoose.models.Message as Model<IMessage>;
+      const scopes = conversationBatchScopes(messages);
+      await assertConversationBatchWritable(mongoose, scopes);
+      const tenant = resourceBatchTenantFilter();
       const bulkOps = messages.map((message) => ({
         updateOne: {
-          filter: { messageId: message.messageId },
-          update: message,
+          filter: { messageId: message.messageId, user: message.user, ...tenant },
+          update: { $set: { ...message, expiryReferencesOnly: false } },
           timestamps: !overrideTimestamp,
           upsert: true,
         },
       }));
-      const result = await tenantSafeBulkWrite(Message, bulkOps);
+      let result;
+      try {
+        result = await tenantSafeBulkWrite(Message, bulkOps);
+      } finally {
+        await assertConversationBatchWritable(mongoose, scopes, async (blocked) => {
+          await Message.deleteMany({ $and: [tenant, { $or: blocked }] });
+        });
+      }
       return result;
     } catch (err) {
       logger.error('Error saving messages in bulk:', err);
@@ -240,6 +581,10 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
   }) {
     try {
       const Message = mongoose.models.Message as Model<IMessage>;
+      const writeScope = conversationId
+        ? { userId: user, conversationIds: [conversationId] }
+        : undefined;
+      if (writeScope) await assertResourceWritable(mongoose, writeScope);
       const message = {
         user,
         endpoint,
@@ -249,10 +594,15 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
         ...rest,
       };
 
-      return await Message.findOneAndUpdate({ user, messageId }, message, {
+      const recorded = await Message.findOneAndUpdate({ user, messageId }, message, {
         upsert: true,
         new: true,
       });
+      if (writeScope)
+        await assertResourceWritable(mongoose, writeScope, async () => {
+          await Message.deleteMany({ user, conversationId });
+        });
+      return recorded;
     } catch (err) {
       logger.error('Error recording message:', err);
       throw err;
@@ -268,7 +618,26 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
   ) {
     try {
       const Message = mongoose.models.Message as Model<IMessage>;
-      await Message.updateOne({ messageId, user: userId }, { text });
+      const stored = await Message.findOne({ messageId, user: userId })
+        .select('_id conversationId')
+        .lean();
+      if (!stored) return;
+      const scope = {
+        userId,
+        conversationIds: stored.conversationId ? [stored.conversationId] : [],
+      };
+      await assertResourceWritable(mongoose, scope);
+      await Message.updateOne(
+        { _id: stored._id, user: userId, conversationId: stored.conversationId ?? null },
+        { text },
+      );
+      await assertResourceWritable(mongoose, scope, async () => {
+        await Message.deleteOne({
+          _id: stored._id,
+          user: userId,
+          conversationId: stored.conversationId ?? null,
+        });
+      });
     } catch (err) {
       logger.error('Error updating message text:', err);
       throw err;
@@ -415,11 +784,16 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
     }
     try {
       const Message = mongoose.models.Message as Model<IMessage>;
+      const scope = { userId, conversationIds: [conversationId] };
+      await assertResourceWritable(mongoose, scope);
       const result = await Message.findOneAndUpdate(
         { messageId, user: userId, conversationId },
         stages,
         { new: true, projection: { unfinished: 1 } },
       ).lean<{ unfinished?: boolean } | null>();
+      await assertResourceWritable(mongoose, scope, async () => {
+        await Message.deleteOne({ messageId, user: userId, conversationId });
+      });
       return { matched: result != null, unfinished: result?.unfinished === true };
     } catch (err) {
       logger.error('Error updating tool call result:', err);
@@ -438,13 +812,37 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
     try {
       const Message = mongoose.models.Message as Model<IMessage>;
       const { messageId, ...update } = message;
-      const updatedMessage = await Message.findOneAndUpdate({ messageId, user: userId }, update, {
-        new: true,
-      });
+      const stored = await Message.findOne({ messageId, user: userId })
+        .select('_id conversationId')
+        .lean();
+      if (!stored) throw new Error('Message not found or user not authorized.');
+      const scope = {
+        userId,
+        conversationIds: [
+          ...new Set(
+            [
+              stored.conversationId,
+              typeof update.conversationId === 'string' ? update.conversationId : undefined,
+            ].filter((id): id is string => !!id),
+          ),
+        ],
+      };
+      await assertResourceWritable(mongoose, scope);
+      const updatedMessage = await Message.findOneAndUpdate(
+        { _id: stored._id, user: userId, conversationId: stored.conversationId ?? null },
+        { $set: { ...update, user: userId } },
+        {
+          new: true,
+        },
+      );
 
       if (!updatedMessage) {
         throw new Error('Message not found or user not authorized.');
       }
+
+      await assertResourceWritable(mongoose, scope, async () => {
+        await Message.deleteOne({ _id: updatedMessage._id, user: userId });
+      });
 
       return {
         messageId: updatedMessage.messageId,
@@ -513,7 +911,31 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
         query.limit(options.limit);
       }
 
-      return await query.lean<IMessage[]>();
+      if (options.includeDeleted) return await query.lean<IMessage[]>();
+      const pipeline: PipelineStage[] = [
+        { $match: query.cast(Message) },
+        { $match: activeExpirationFilter() },
+      ];
+      if (options.sort !== false) pipeline.push({ $sort: options.sort ?? { createdAt: 1 } });
+      pipeline.push(...excludeDeletedConversations());
+      if (options.limit != null && options.limit > 0) pipeline.push({ $limit: options.limit });
+      pipeline.push(...redactDeletedFileReferences());
+      const projection = query.projection();
+      if (projection) {
+        const explicit = Object.fromEntries(
+          Object.entries(projection).filter(([key]) => !key.startsWith('+')),
+        );
+        const includes = Object.values(explicit).some((value) => value === 1);
+        if (includes) {
+          for (const key of Object.keys(projection)) {
+            if (key.startsWith('+')) explicit[key.slice(1)] = 1;
+          }
+        }
+        if (!includes && !projection['+_meiliIndex'] && !projection._meiliIndex)
+          explicit._meiliIndex = 0;
+        if (Object.keys(explicit).length) pipeline.push({ $project: explicit });
+      } else pipeline.push({ $unset: '_meiliIndex' });
+      return await Message.aggregate<IMessage>(pipeline);
     } catch (err) {
       logger.error('Error getting messages:', err);
       throw err;
@@ -526,7 +948,15 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
   async function getMessage({ user, messageId }: { user: string; messageId: string }) {
     try {
       const Message = mongoose.models.Message as Model<IMessage>;
-      return await Message.findOne({ user, messageId }).lean<IMessage>();
+      const rows = await Message.aggregate<IMessage>([
+        { $match: { user, messageId } },
+        { $match: activeExpirationFilter() },
+        ...excludeDeletedConversations(),
+        { $limit: 1 },
+        ...redactDeletedFileReferences(),
+        { $unset: '_meiliIndex' },
+      ]);
+      return rows[0] ?? null;
     } catch (err) {
       logger.error('Error getting message:', err);
       throw err;
@@ -564,10 +994,16 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
     if (cursor) {
       queryFilter[sortField] = sortOrder === 1 ? { $gt: cursor } : { $lt: cursor };
     }
-    const messages = await Message.find(queryFilter)
-      .sort({ [sortField]: sortOrder })
-      .limit(limit + 1)
-      .lean<IMessage[]>();
+    const castFilter = Message.find(queryFilter).cast(Message);
+    const messages = await Message.aggregate<IMessage>([
+      { $match: castFilter },
+      { $match: activeExpirationFilter() },
+      { $sort: { [sortField]: sortOrder } },
+      ...excludeDeletedConversations(),
+      { $limit: limit + 1 },
+      ...redactDeletedFileReferences(),
+      { $unset: '_meiliIndex' },
+    ]);
 
     let nextCursor: string | null = null;
     if (messages.length > limit) {
@@ -599,6 +1035,14 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
   }
 
   return {
+    compactExpiredMessages: (limit, now) => compactExpiredMessages(mongoose, limit, now),
+    getExpiredOrphanMessageScopes: (limit, now) =>
+      getExpiredOrphanMessageScopes(mongoose, limit, now),
+    prepareMessageExpiryIndex: () => prepareRetentionIndex(mongoose, 'Message'),
+    removeSGFileReferences,
+    finishSGGenerationMessage,
+    prepareSGGenerationMessage,
+    cancelSGGenerationMessage,
     saveMessage,
     bulkSaveMessages,
     recordMessage,

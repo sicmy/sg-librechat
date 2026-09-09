@@ -172,6 +172,7 @@ class AgentClient extends BaseClient {
       contextUsageSink,
       usageEmitSink,
       sgCitationSink,
+      sgArtifactSink,
       toolInputValidationErrors,
       ...clientOptions
     } = options;
@@ -189,6 +190,7 @@ class AgentClient extends BaseClient {
     this.usageEmitSink = usageEmitSink;
     /** Latest validated SG citation envelope captured from provider response metadata. */
     this.sgCitationSink = sgCitationSink;
+    this.sgArtifactSink = sgArtifactSink;
     /** Schema-validation exceptions keyed by tool-call ID. The completion
      *  handler consumes these to distinguish execution failures from tool
      *  output that merely contains similar text.
@@ -1970,6 +1972,10 @@ class AgentClient extends BaseClient {
     });
 
     const completion = filterMalformedContentParts(this.contentParts);
+    if (this.sgArtifactSink?.latest && this.sgArtifactSink.register) {
+      await this.sgArtifactSink.register(this.sgArtifactSink.latest);
+      this.sgArtifactSink.registered = true;
+    }
     const metadata = this.buildResponseMetadata();
     return metadata ? { completion, metadata } : { completion };
   }
@@ -1992,6 +1998,13 @@ class AgentClient extends BaseClient {
      *   usage?: import('librechat-data-provider').TResponseUsage,
      * }} */
     const metadata = {};
+    const generationReceipt = this.sgArtifactSink?.getReceipt?.(
+      this.sgArtifactSink?.registered,
+      this.abortController?.signal?.aborted,
+    );
+    if (generationReceipt) {
+      metadata.sgGeneration = generationReceipt;
+    }
     const signatures = this.collectedThoughtSignatures;
     if (signatures && Object.keys(signatures).length > 0) {
       metadata.thoughtSignatures = signatures;
@@ -2047,6 +2060,9 @@ class AgentClient extends BaseClient {
     }
     if (this.sgCitationSink?.latest) {
       metadata.sgCitations = this.sgCitationSink.latest;
+    }
+    if (this.sgArtifactSink?.registered) {
+      metadata.sgArtifacts = this.sgArtifactSink.latest;
     }
     return Object.keys(metadata).length > 0 ? metadata : undefined;
   }

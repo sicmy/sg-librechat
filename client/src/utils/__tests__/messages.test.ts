@@ -253,6 +253,7 @@ const makeFieldsMsg = (over: Partial<TMessage> = {}): TMessage =>
  * and adding a rendered field should mean adding it in both places.
  */
 const FIELD_MUTATIONS: Array<[string, Partial<TMessage>]> = [
+  ['SG artifacts', { metadata: { sgArtifacts: { schema_version: 1, artifacts: [] } } }],
   ['messageId', { messageId: 'm2' }],
   ['text', { text: 'changed' }],
   ['error', { error: true }],

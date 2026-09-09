@@ -2,6 +2,7 @@ import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { Skeleton } from '@librechat/client';
 import { apiBaseUrl, dataService } from 'librechat-data-provider';
 import DialogImage from './DialogImage';
+import { useFilePreview } from '~/data-provider/Files/queries';
 import { cn } from '~/utils';
 
 /** Max display height for chat images (Tailwind JIT class) */
@@ -66,9 +67,13 @@ const Image = ({
   }, [imagePath]);
 
   const needsAuthenticatedFetch = imagePath.startsWith('/api/files/sg-image/');
+  const fileId = needsAuthenticatedFetch ? imagePath.split('/').pop() : undefined;
+  const { data: filePreview } = useFilePreview(fileId, { enabled: needsAuthenticatedFetch });
+  const imageReady = filePreview?.status === 'ready';
 
   useEffect(() => {
-    if (!needsAuthenticatedFetch || !absoluteImageUrl) {
+    setAuthenticatedImageUrl('');
+    if (!needsAuthenticatedFetch || !absoluteImageUrl || !imageReady) {
       setAuthenticatedImageUrl('');
       return;
     }
@@ -91,7 +96,7 @@ const Image = ({
         window.URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [absoluteImageUrl, needsAuthenticatedFetch]);
+  }, [absoluteImageUrl, needsAuthenticatedFetch, imageReady]);
 
   const displayImageUrl = needsAuthenticatedFetch ? authenticatedImageUrl : absoluteImageUrl;
 

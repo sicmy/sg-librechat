@@ -16,6 +16,7 @@ import { Artifact, artifactPlugin } from '~/components/Artifacts/Artifact';
 import { code, a, p, img, table } from './MarkdownComponents';
 import { langSubset, remarkApproxTilde } from '~/utils';
 import { unicodeCitation } from '~/components/Web';
+import { remarkJsonPaths } from './paths';
 
 /**
  * Single source of truth for the markdown rendering pipeline, shared by the
@@ -40,6 +41,7 @@ export const getRemarkPlugins = (): PluggableList => {
       remarkApproxTilde,
       supersub,
       remarkGfm,
+      remarkJsonPaths,
       remarkDirective,
       artifactPlugin,
       [remarkMath, { singleDollarTextMath: false }],

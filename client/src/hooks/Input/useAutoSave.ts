@@ -168,6 +168,15 @@ export const useAutoSave = ({
       return;
     }
 
+    // Do not consume a saved file draft before the authorized file list arrives.
+    // Otherwise the empty restoration is saved back over the recoverable IDs.
+    if (
+      fileList == null &&
+      localStorage.getItem(`${LocalStorageKeys.FILES_DRAFT}${conversationId}`)
+    ) {
+      return;
+    }
+
     // clear attachment files when switching conversation
     setFiles(new Map());
 
@@ -224,6 +233,7 @@ export const useAutoSave = ({
   }, [
     currentConversationId,
     conversationId,
+    fileList,
     restoreFiles,
     textAreaRef,
     restoreText,

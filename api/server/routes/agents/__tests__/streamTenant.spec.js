@@ -17,6 +17,16 @@ const mockGenerationJobManager = {
 const mockCaptureAgentCheckpointGeneration = jest.fn();
 const mockDeleteAgentCheckpoint = jest.fn();
 const mockSaveMessage = jest.fn();
+const mockDeletedConversation = jest.fn().mockResolvedValue(false);
+const mockDeletedFiles = jest.fn().mockResolvedValue([]);
+const mockGetConvo = jest.fn();
+const mockGetMessages = jest.fn();
+beforeEach(() => {
+  mockDeletedConversation.mockReset().mockResolvedValue(false);
+  mockDeletedFiles.mockReset().mockResolvedValue([]);
+  mockGetConvo.mockReset();
+  mockGetMessages.mockReset();
+});
 
 jest.mock('@librechat/data-schemas', () => ({
   ...jest.requireActual('@librechat/data-schemas'),
@@ -38,6 +48,10 @@ jest.mock('@librechat/api', () => ({
 
 jest.mock('~/models', () => ({
   saveMessage: (...args) => mockSaveMessage(...args),
+  isResourceWriteBlocked: (...args) => mockDeletedConversation(...args),
+  getDeletedFileIds: (...args) => mockDeletedFiles(...args),
+  getConvo: (...args) => mockGetConvo(...args),
+  getMessages: (...args) => mockGetMessages(...args),
 }));
 
 let mockUserId = 'user-123';
@@ -70,6 +84,181 @@ const app = express();
 app.use(express.json());
 app.use('/agents', agentsRouter);
 app.use((error, _req, res, _next) => res.status(500).json({ error: error.message }));
+
+describe('deleted conversation stream gates', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockUserId = 'user-123';
+    mockTenantId = undefined;
+  });
+  it.each(['', '?resume=true'])(
+    'rejects a deleted conversation before attaching %s',
+    async (suffix) => {
+      mockGenerationJobManager.getJob.mockResolvedValue({
+        metadata: { userId: 'user-123' },
+        status: 'complete',
+        createdAt: 1000,
+      });
+      mockDeletedConversation.mockResolvedValue(true);
+      const response = await request(app).get(`/agents/chat/stream/stream-deleted${suffix}`);
+      expect(response.status).toBe(404);
+      expect(response.headers['content-type']).not.toContain('text/event-stream');
+      expect(mockGenerationJobManager.subscribe).not.toHaveBeenCalled();
+      expect(mockGenerationJobManager.subscribeWithResume).not.toHaveBeenCalled();
+      expect(mockDeletedConversation).toHaveBeenCalledWith('user-123', ['stream-deleted']);
+    },
+  );
+  it('does not read cached status or parked content for a deleted conversation', async () => {
+    mockDeletedConversation.mockResolvedValue(true);
+    const response = await request(app).get('/agents/chat/status/stream-deleted');
+    expect(response.status).toBe(404);
+    expect(mockGenerationJobManager.getJob).not.toHaveBeenCalled();
+    expect(mockGenerationJobManager.getResumeState).not.toHaveBeenCalled();
+  });
+  it('rechecks deletion after loading a previously authorized cached snapshot', async () => {
+    mockDeletedConversation.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    mockGenerationJobManager.getJob.mockResolvedValue({
+      metadata: { userId: 'user-123' },
+      status: 'complete',
+      createdAt: 1000,
+    });
+    mockGenerationJobManager.getResumeState.mockResolvedValue({
+      aggregatedContent: 'synthetic stale cached content',
+    });
+    const response = await request(app).get('/agents/chat/status/stream-deleted');
+    expect(response.status).toBe(404);
+    expect(JSON.stringify(response.body)).not.toContain('synthetic stale cached content');
+    expect(mockDeletedConversation).toHaveBeenCalledTimes(2);
+  });
+  it('filters cached request files from status without mutating the stored snapshot', async () => {
+    const state = {
+      runSteps: [],
+      userMessage: {
+        messageId: 'request',
+        files: [{ file_id: 'file_removed' }, { file_id: 'file_kept' }],
+      },
+    };
+    mockDeletedFiles.mockResolvedValue(['file_removed']);
+    mockGenerationJobManager.getJob.mockResolvedValue({
+      metadata: { userId: 'user-123' },
+      status: 'running',
+      createdAt: 1000,
+    });
+    mockGenerationJobManager.getResumeState.mockResolvedValue(state);
+    const response = await request(app).get('/agents/chat/status/stream-123');
+    expect(response.status).toBe(200);
+    expect(response.body.resumeState.userMessage.files).toEqual([{ file_id: 'file_kept' }]);
+    expect(state.userMessage.files).toHaveLength(2);
+  });
+  it('filters SYNC files before activating the paused resume subscription', async () => {
+    mockDeletedFiles.mockResolvedValue(['file_removed']);
+    mockGenerationJobManager.getJob.mockResolvedValue({
+      metadata: { userId: 'user-123' },
+      status: 'running',
+      createdAt: 1000,
+    });
+    mockGenerationJobManager.subscribeWithResume.mockImplementation(async (_id, _write, done) => ({
+      subscription: { unsubscribe: jest.fn(), activate: () => done({ final: true }) },
+      pendingEvents: [],
+      resumeState: {
+        runSteps: [],
+        userMessage: {
+          messageId: 'request',
+          files: [{ file_id: 'file_removed' }, { file_id: 'file_kept' }],
+        },
+      },
+    }));
+    const response = await request(app).get('/agents/chat/stream/stream-123?resume=true');
+    expect(response.status).toBe(200);
+    expect(response.text).toContain('file_kept');
+    expect(response.text).not.toContain('file_removed');
+  });
+  it('waits for asynchronous FINAL refresh instead of closing on a null subscription', async () => {
+    mockGenerationJobManager.getJob.mockResolvedValue({
+      metadata: { userId: 'user-123' },
+      status: 'complete',
+      createdAt: 1000,
+    });
+    mockGetConvo.mockResolvedValue({
+      conversationId: 'stream-123',
+      user: 'user-123',
+      title: 'fresh title',
+    });
+    mockGetMessages.mockImplementation(async () => {
+      await new Promise((resolve) => setImmediate(resolve));
+      return [
+        { messageId: 'request', isCreatedByUser: true, files: [] },
+        { messageId: 'response', isCreatedByUser: false, text: 'fresh body', metadata: {} },
+      ];
+    });
+    mockGenerationJobManager.subscribe.mockImplementation((_id, _write, done) => {
+      done({
+        final: true,
+        requestMessage: { messageId: 'request' },
+        responseMessage: {
+          messageId: 'response',
+          metadata: { sgArtifacts: { artifacts: [{ file_id: 'file_removed' }] } },
+        },
+      });
+      return null;
+    });
+    const response = await request(app).get('/agents/chat/stream/stream-123');
+    expect(response.status).toBe(200);
+    expect(response.text).toContain('fresh body');
+    expect(response.text).toContain('fresh title');
+    expect(response.text).not.toContain('file_removed');
+  });
+  it('never falls back to cached SG metadata when terminal refresh fails', async () => {
+    mockGenerationJobManager.getJob.mockResolvedValue({
+      metadata: { userId: 'user-123' },
+      status: 'complete',
+      createdAt: 1000,
+    });
+    mockGetConvo.mockResolvedValue(null);
+    mockGetMessages.mockResolvedValue([]);
+    mockGenerationJobManager.subscribe.mockImplementation((_id, _write, done) => {
+      done({
+        final: true,
+        requestMessage: { messageId: 'request' },
+        responseMessage: {
+          messageId: 'response',
+          metadata: { sgArtifacts: { artifacts: [{ file_id: 'file_removed' }] } },
+        },
+      });
+      return null;
+    });
+    const response = await request(app).get('/agents/chat/stream/stream-123');
+    expect(response.text).toContain('event: error');
+    expect(response.text).not.toContain('file_removed');
+  });
+  it('redacts parked steer file details while preserving the required file ID', async () => {
+    const steers = [
+      {
+        steerId: 'parked-one',
+        text: 'keep my request',
+        files: [
+          { file_id: 'file_removed', filename: 'private-name.pdf', filepath: '/private-path' },
+        ],
+      },
+    ];
+    mockDeletedFiles.mockResolvedValue(['file_removed']);
+    mockGenerationJobManager.getJob.mockResolvedValue(null);
+    mockGenerationJobManager.steering.claimDetailed.mockResolvedValue({
+      generationProtocolVersion: 1,
+      steers,
+    });
+    const response = await request(app).get('/agents/chat/status/stream-123');
+    expect(response.status).toBe(200);
+    expect(response.body.unrecoveredSteers).toEqual([
+      {
+        steerId: 'parked-one',
+        text: 'keep my request',
+        files: [{ file_id: 'file_removed', status: 'failed' }],
+      },
+    ]);
+    expect(steers[0].files[0].filename).toBe('private-name.pdf');
+  });
+});
 
 function mockSubscribeSuccess() {
   mockGenerationJobManager.subscribe.mockImplementation((_streamId, _writeEvent, onDone) => {

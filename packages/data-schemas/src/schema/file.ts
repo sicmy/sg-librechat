@@ -148,6 +148,8 @@ const file: Schema<IMongoFile> = new Schema(
             },
             retryable: { type: Boolean },
             errorCode: { type: String, maxlength: 200 },
+            sourceFileId: { type: String, maxlength: 128 },
+            requestMessageId: { type: String, maxlength: 128 },
           },
           { _id: false },
         ),
@@ -178,6 +180,8 @@ const file: Schema<IMongoFile> = new Schema(
        * backing storage first, then removes this metadata record. */
       type: Date,
     },
+    /** SG upload hold timestamp; application cleanup applies the legacy TTL grace. */
+    sgUploadExpiresAt: { type: Date },
   },
   {
     timestamps: true,
@@ -185,6 +189,14 @@ const file: Schema<IMongoFile> = new Schema(
 );
 
 file.index({ expiredAt: 1 });
+file.index({ source: 1, sgUploadExpiresAt: 1 });
+file.index({ user: 1, 'metadata.sgGateway.endpoint': 1, 'metadata.sgGateway.sourceFileId': 1 });
+file.index({
+  user: 1,
+  'metadata.sgGateway.endpoint': 1,
+  'metadata.sgGateway.requestMessageId': 1,
+  'metadata.sgGateway.conversationId': 1,
+});
 file.index({ createdAt: 1, updatedAt: 1 });
 file.index(
   { filename: 1, conversationId: 1, context: 1, tenantId: 1 },

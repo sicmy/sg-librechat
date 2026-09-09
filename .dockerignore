@@ -15,3 +15,19 @@ docs
 
 # Ignore all hidden files
 .*
+
+# Never send actual environment files, including nested test files, to the builder.
+**/.env
+**/.env.*
+**/*.env
+**/*.env.*
+
+# Runtime bind data stays on the host, never in a release image.
+/uploads
+/logs
+/images
+/skill
+**/.test-results
+**/test-results
+**/playwright-report
+**/coverage
