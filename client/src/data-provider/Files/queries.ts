@@ -165,7 +165,61 @@ export const useSGCitationPage = (
   );
 };
 
-export const useSGCitationDownload = (fileId?: string): QueryObserverResult<Blob, unknown> => {
+export const useSGCitationImage = (fileId?: string): QueryObserverResult<Blob, unknown> => {
+  return useQuery<Blob, unknown>(
+    [QueryKeys.sgCitationImage, fileId ?? ''],
+    async () => {
+      if (!fileId) {
+        throw new Error('Citation image requires a file');
+      }
+      const response = await dataService.getSGCitationImage(fileId);
+      return response.data;
+    },
+    {
+      enabled: !!fileId,
+      retry: false,
+      refetchOnWindowFocus: false,
+      staleTime: Infinity,
+    },
+  );
+};
+
+export const useSGCitationFrame = (
+  fileId?: string,
+  frameNumber?: number,
+): QueryObserverResult<Blob, unknown> => {
+  return useQuery<Blob, unknown>(
+    [QueryKeys.sgCitationFrame, fileId ?? '', frameNumber ?? -1],
+    async () => {
+      if (!fileId || frameNumber == null || frameNumber < 0) {
+        throw new Error('Citation frame requires a file and frame number');
+      }
+      const response = await dataService.getSGCitationFrame(fileId, frameNumber);
+      return response.data;
+    },
+    {
+      enabled: !!fileId && frameNumber != null && frameNumber >= 0,
+      retry: false,
+      refetchOnWindowFocus: false,
+      staleTime: Infinity,
+    },
+  );
+};
+
+export const useSGDocumentPreview = (fileId?: string) =>
+  useQuery(
+    [QueryKeys.sgDocumentPreview, fileId],
+    async () => {
+      if (!fileId) throw new Error('Document preview requires a file');
+      return (await dataService.getSGDocumentPreview(fileId)).data;
+    },
+    { enabled: false, retry: false, refetchOnWindowFocus: false, cacheTime: 0 },
+  );
+
+export const useSGCitationDownload = (
+  fileId?: string,
+  enabled = false,
+): QueryObserverResult<Blob, unknown> => {
   return useQuery<Blob, unknown>(
     [QueryKeys.sgCitationDownload, fileId ?? ''],
     async () => {
@@ -176,8 +230,10 @@ export const useSGCitationDownload = (fileId?: string): QueryObserverResult<Blob
       return response.data;
     },
     {
-      enabled: false,
+      enabled: enabled && !!fileId,
       retry: false,
+      refetchOnWindowFocus: false,
+      staleTime: Infinity,
     },
   );
 };

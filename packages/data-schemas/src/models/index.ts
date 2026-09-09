@@ -35,12 +35,14 @@ import { createUserModel } from './user';
 import { createRoleModel } from './role';
 import { createFileModel } from './file';
 import { createKeyModel } from './key';
+import { createResourceDeletionModel } from './resourceDeletion';
 import logger from '~/config/winston';
 
 /**
  * Creates all database models for all collections
  */
 export function createModels(mongoose: typeof import('mongoose')): {
+  ResourceDeletion: ReturnType<typeof createResourceDeletionModel>;
   User: ReturnType<typeof createUserModel>;
   Token: ReturnType<typeof createTokenModel>;
   Session: ReturnType<typeof createSessionModel>;
@@ -85,6 +87,7 @@ export function createModels(mongoose: typeof import('mongoose')): {
     Session: createSessionModel(mongoose),
     Balance: createBalanceModel(mongoose),
     Conversation: createConversationModel(mongoose),
+    ResourceDeletion: createResourceDeletionModel(mongoose),
     ChatProject: createChatProjectModel(mongoose),
     Message: createMessageModel(mongoose),
     Agent: createAgentModel(mongoose),

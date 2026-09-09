@@ -221,7 +221,7 @@ describe('initializeClient — processAgent ACL gate', () => {
         sgGateway: {
           endpoint: 'SG AI Gateway',
           jobId: 'job_0123456789abcdef0123456789abcdef',
-          conversationId: 'draft-scope',
+          conversationId: 'conv_1',
           state: 'READY',
         },
       },
@@ -261,7 +261,7 @@ describe('initializeClient — processAgent ACL gate', () => {
     expect(agentClientArgs.agent.model_parameters.modelKwargs.sg_internal).toEqual({
       tenant_id: expect.stringMatching(/^tenant-/),
       user_id: testUser._id.toString(),
-      conversation_id: 'draft-scope',
+      conversation_id: 'conv_1',
       message_id: 'message-a',
       file_ids: [fileId],
     });
@@ -284,7 +284,7 @@ describe('initializeClient — processAgent ACL gate', () => {
           sgGateway: {
             endpoint: 'SG AI Gateway',
             jobId: `job_${fileId.slice(5)}`,
-            conversationId: 'draft-scope',
+            conversationId: 'conv_1',
             state: 'READY',
           },
         },
@@ -344,12 +344,12 @@ describe('initializeClient — processAgent ACL gate', () => {
 
     expect(db.getMessages).toHaveBeenCalledWith(
       { conversationId: 'conv_1' },
-      'messageId parentMessageId files attachments',
+      'messageId parentMessageId files attachments metadata.sgArtifacts',
     );
     expect(agentClientArgs.agent.model_parameters.modelKwargs.sg_internal).toEqual({
       tenant_id: expect.stringMatching(/^tenant-/),
       user_id: testUser._id.toString(),
-      conversation_id: 'draft-scope',
+      conversation_id: 'conv_1',
       message_id: 'message-follow-up',
       file_ids: [activeFileId],
     });

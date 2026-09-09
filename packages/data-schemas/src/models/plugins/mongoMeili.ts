@@ -14,6 +14,7 @@ import type { SearchResponse, SearchParams, Index, MeiliSearchErrorInfo } from '
 import type { IConversation, IMessage } from '~/types';
 import { buildRetentionVisibilityFilter, legacyPermanentExpirationFilter } from '~/utils/retention';
 import logger from '~/config/meiliLogger';
+import { getTenantId, SYSTEM_TENANT_ID } from '~/config/tenantContext';
 
 interface MongoMeiliOptions {
   host: string;
@@ -53,6 +54,10 @@ interface _DocumentWithMeiliIndex extends Document {
 export type DocumentWithMeiliIndex = _DocumentWithMeiliIndex & IConversation & Partial<IMessage>;
 
 export interface SchemaWithMeiliMethods extends Model<DocumentWithMeiliIndex> {
+  sweepMeiliIndex(
+    batchSize?: number,
+    maxBatches?: number,
+  ): Promise<{ scanned: number; deleted: number; complete: boolean }>;
   syncWithMeili(): Promise<void>;
   getSyncProgress(): Promise<SyncProgress>;
   processSyncBatch(
@@ -194,8 +199,81 @@ const createMeiliMongooseModel = ({
   syncOptions: { batchSize: number; delayMs: number };
 }) => {
   const syncConfig = { ...getSyncConfig(), ...syncOptions };
+  let searchCleanupOffset = 0;
 
   class MeiliMongooseModel {
+    static async sweepMeiliIndex(
+      this: SchemaWithMeiliMethods,
+      batchSize = 100,
+      maxBatches = 8,
+    ): Promise<{ scanned: number; deleted: number; complete: boolean }> {
+      if (getTenantId() !== SYSTEM_TENANT_ID) throw new Error('system_scope_required');
+      if (
+        !Number.isInteger(batchSize) ||
+        batchSize < 1 ||
+        batchSize > 1000 ||
+        !Number.isInteger(maxBatches) ||
+        maxBatches < 1 ||
+        maxBatches > 100
+      )
+        throw new Error('invalid_search_cleanup_batch');
+      let scanned = 0,
+        deleted = 0;
+      for (let batchNumber = 0; batchNumber < maxBatches; batchNumber++) {
+        const batch = await index.getDocuments({
+          limit: batchSize,
+          offset: searchCleanupOffset,
+          fields: [primaryKey, 'user'],
+        });
+        if (!batch.results.length) {
+          searchCleanupOffset = 0;
+          return { scanned, deleted, complete: true };
+        }
+        const ids = batch.results.map((doc) => String(doc[primaryKey]));
+        const identities: FilterQuery<DocumentWithMeiliIndex>[] = [{ [primaryKey]: { $in: ids } }];
+        if (primaryKey === 'conversationId') {
+          for (const id of ids.filter((value) => value.includes('--'))) {
+            identities.push({
+              conversationId: new RegExp(`^${_.escapeRegExp(id).replace(/--/g, '(?:--|\\|)')}$`),
+            });
+          }
+        }
+        const existing = await this.find({ $and: [getIndexableQuery(), { $or: identities }] })
+          .select(`${primaryKey} user`)
+          .lean<MeiliIndexable[]>();
+        const retained = new Set(
+          existing.map((doc) =>
+            JSON.stringify([
+              primaryKey === 'conversationId'
+                ? String(doc[primaryKey]).replace(/\|/g, '--')
+                : String(doc[primaryKey]),
+              String(doc.user),
+            ]),
+          ),
+        );
+        const expired = batch.results
+          .filter(
+            (doc) => !retained.has(JSON.stringify([String(doc[primaryKey]), String(doc.user)])),
+          )
+          .map((doc) => String(doc[primaryKey]));
+        if (expired.length) {
+          const task = await index.deleteDocuments(expired);
+          const completed = await index.waitForTask(task.taskUid, {
+            timeOutMs: 10_000,
+            intervalMs: 100,
+          });
+          if (completed.status !== 'succeeded') throw new Error('search_cleanup_failed');
+        }
+        scanned += batch.results.length;
+        deleted += expired.length;
+        if (batch.results.length < batchSize) {
+          searchCleanupOffset = 0;
+          return { scanned, deleted, complete: true };
+        }
+        searchCleanupOffset += batch.results.length - expired.length;
+      }
+      return { scanned, deleted, complete: false };
+    }
     /**
      * Get the current sync progress
      */
@@ -730,11 +808,19 @@ export default function mongoMeili(schema: Schema, options: MongoMeiliOptions): 
   });
 
   schema.post('updateOne', function (doc: DocumentWithMeiliIndex, next) {
-    doc.postUpdateHook?.(next);
+    if (doc?.postUpdateHook) {
+      doc.postUpdateHook(next);
+      return;
+    }
+    next();
   });
 
   schema.post('deleteOne', function (doc: DocumentWithMeiliIndex, next) {
-    doc.postRemoveHook?.(next);
+    if (doc?.postRemoveHook) {
+      doc.postRemoveHook(next);
+      return;
+    }
+    next();
   });
 
   // Pre-deleteMany hook: remove corresponding documents from MeiliSearch when multiple documents are deleted.

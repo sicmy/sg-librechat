@@ -2,12 +2,16 @@ const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { logger } = require('@librechat/data-schemas');
 const { ContentTypes, feedbackSchema, isAssistantsEndpoint } = require('librechat-data-provider');
+const { extractEnvVariable } = require('librechat-data-provider');
 const {
   unescapeLaTeX,
   countTokens,
   sendFeedbackScore,
   traceIdForMessage,
   mergeQuotedTextForCount,
+  recoverSGGenerationMessages,
+  getCustomEndpointConfig,
+  isSGFileGatewayEndpoint,
 } = require('@librechat/api');
 const { findAllArtifacts, replaceArtifactContent } = require('~/server/services/Artifacts/update');
 const {
@@ -81,6 +85,7 @@ router.get('/', async (req, res) => {
       for (const message of cleanedMessages) {
         const convo = result.convoMap[message.conversationId];
         const dbMessage = dbMessageMap[message.messageId];
+        if (!dbMessage) continue;
 
         activeMessages.push({
           ...message,
@@ -277,36 +282,64 @@ router.post('/artifact/:messageId', async (req, res) => {
   }
 });
 
-router.get('/:conversationId', prepareMessageRequestValidation, async (req, res) => {
-  try {
-    const { conversationId } = req.params;
-    const validation = req.messageRequestValidation;
-    // This intentionally starts a user-scoped read before validation resolves;
-    // the response remains gated on validation success below.
-    const messagesPromise = validation.shouldFetchMessages
-      ? db.getMessages({ conversationId, user: req.user.id }, '-_id -__v -user').then(
-          (messages) => ({ messages }),
-          (error) => ({ error }),
-        )
-      : null;
+router.get(
+  '/:conversationId',
+  prepareMessageRequestValidation,
+  configMiddleware,
+  async (req, res) => {
+    try {
+      const { conversationId } = req.params;
+      const validation = req.messageRequestValidation;
+      // This intentionally starts a user-scoped read before validation resolves;
+      // the response remains gated on validation success below.
+      const messagesPromise = validation.shouldFetchMessages
+        ? db.getMessages({ conversationId, user: req.user.id }, '-_id -__v -user').then(
+            (messages) => ({ messages }),
+            (error) => ({ error }),
+          )
+        : null;
 
-    const validationResult = await validation.promise;
-    if (!validationResult.ok) {
-      return sendValidationResponse(res, validationResult);
+      const validationResult = await validation.promise;
+      if (!validationResult.ok) {
+        return sendValidationResponse(res, validationResult);
+      }
+
+      const messagesResult = await messagesPromise;
+      if (messagesResult?.error) {
+        throw messagesResult.error;
+      }
+
+      let messages = messagesResult?.messages ?? [];
+      const recovered =
+        messages.some((message) => message.metadata?.sgGeneration?.state === 'pending') &&
+        (await recoverSGGenerationMessages({
+          userId: req.user.id,
+          tenantId: req.user.tenantId,
+          conversationId,
+          messages,
+          createFile: db.createFile,
+          finish: db.finishSGGenerationMessage,
+          allowedAddresses: req.config?.endpoints?.allowedAddresses,
+          resolveEndpoint: (endpoint) => {
+            const config = getCustomEndpointConfig({ endpoint, appConfig: req.config });
+            if (!isSGFileGatewayEndpoint(config)) return undefined;
+            return {
+              ...config,
+              apiKey: extractEnvVariable(config.apiKey),
+              baseURL: extractEnvVariable(config.baseURL),
+            };
+          },
+        }));
+      if (recovered) {
+        messages = await db.getMessages({ conversationId, user: req.user.id }, '-_id -__v -user');
+      }
+      res.status(200).json(messages);
+    } catch (error) {
+      logger.error('Error fetching messages:', error);
+      res.status(500).json({ error: 'Internal server error' });
     }
-
-    const messagesResult = await messagesPromise;
-    if (messagesResult?.error) {
-      throw messagesResult.error;
-    }
-
-    const messages = messagesResult?.messages ?? [];
-    res.status(200).json(messages);
-  } catch (error) {
-    logger.error('Error fetching messages:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+  },
+);
 
 router.post('/:conversationId', validateMessageReq, async (req, res) => {
   try {

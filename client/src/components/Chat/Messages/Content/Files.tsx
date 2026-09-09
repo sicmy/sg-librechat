@@ -35,7 +35,11 @@ const Files = ({ message }: { message?: TMessage }) => {
         imageFiles.map((file) => (
           <Image
             key={file.file_id}
-            imagePath={file.preview ?? file.filepath ?? ''}
+            imagePath={
+              file.filepath?.startsWith('/api/files/sg-image/')
+                ? file.filepath
+                : (file.preview ?? file.filepath ?? '')
+            }
             height={file.height ?? 1920}
             width={file.width ?? 1080}
             altText={file.filename ?? 'Uploaded Image'}
@@ -47,6 +51,7 @@ const Files = ({ message }: { message?: TMessage }) => {
         fileName={selectedFile?.filename ?? ''}
         fileId={selectedFile?.file_id}
         filePath={selectedFile?.filepath}
+        fileSource={selectedFile?.source}
         fileType={selectedFile?.type ?? undefined}
         fileSize={(selectedFile as TFile)?.bytes}
       />

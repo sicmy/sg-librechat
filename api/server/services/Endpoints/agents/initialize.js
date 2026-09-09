@@ -1,4 +1,5 @@
 const { logger } = require('@librechat/data-schemas');
+const { getRetentionExpiry } = require('~/server/services/Files/retention');
 const { createContentAggregator } = require('@librechat/agents');
 const {
   checkAccess,
@@ -20,6 +21,13 @@ const {
   getLazySubagentConfigId,
   isSGFileGatewayEndpoint,
   buildSGInternalContext,
+  bindSGDraftFiles,
+  registerSGArtifacts,
+  createSGGenerationCheckpoint,
+  loadSGTerminalSnapshot,
+  resolveSGRequestMessageId,
+  selectSGEditFiles,
+  toSGScopeToken,
   getThreadData,
 } = require('@librechat/api');
 const {
@@ -27,6 +35,7 @@ const {
   ResourceType,
   EModelEndpoint,
   FileSources,
+  extractEnvVariable,
   PermissionBits,
   PermissionTypes,
   MAX_SUBAGENT_DEPTH,
@@ -367,6 +376,7 @@ const initializeClient = async ({
   const usageEmitSink = [];
   /** @type {{ latest: import('librechat-data-provider').SGCitationMetadata | null }} */
   const sgCitationSink = { latest: null };
+  const sgArtifactSink = { latest: null, register: null, registered: false };
 
   const eventHandlers = getDefaultHandlers({
     res,
@@ -386,6 +396,7 @@ const initializeClient = async ({
     contextUsageSink,
     usageEmitSink,
     sgCitationSink,
+    sgArtifactSink,
   });
 
   const [
@@ -430,6 +441,7 @@ const initializeClient = async ({
     (endpointConfig) => endpointConfig.name === primaryAgent.provider,
   );
   if (isSGFileGatewayEndpoint(customEndpointConfig)) {
+    const sgRequestMessageId = resolveSGRequestMessageId(req.body);
     const requestedFileIds = requestFiles.flatMap((file) =>
       typeof file?.file_id === 'string' && file.file_id ? [file.file_id] : [],
     );
@@ -439,12 +451,21 @@ const initializeClient = async ({
       parentMessageId &&
       parentMessageId !== Constants.NO_PARENT;
     const threadMessages = hasThreadAnchor
-      ? await db.getMessages({ conversationId }, 'messageId parentMessageId files attachments')
+      ? await db.getMessages(
+          { conversationId },
+          'messageId parentMessageId files attachments metadata.sgArtifacts',
+        )
       : [];
     const threadFileIds = hasThreadAnchor
       ? getThreadData(threadMessages ?? [], parentMessageId).fileIds
       : [];
-    const candidateFileIds = [...new Set([...requestedFileIds, ...threadFileIds])];
+    const editFiles = selectSGEditFiles(
+      req.body.text,
+      requestedFileIds,
+      threadMessages ?? [],
+      parentMessageId,
+    );
+    const candidateFileIds = editFiles ?? [...new Set([...requestedFileIds, ...threadFileIds])];
     if (candidateFileIds.length > 0) {
       const ownerFilter = {
         file_id: { $in: candidateFileIds },
@@ -460,15 +481,95 @@ const initializeClient = async ({
           file?.metadata?.sgGateway?.endpoint === primaryAgent.provider
         );
       });
-      const contextFileIds = [...new Set([...requestedFileIds, ...inheritedSGFileIds])];
-      sgInternal = buildSGInternalContext({
-        requestFiles: contextFileIds.map((file_id) => ({ file_id })),
-        authorizedFiles,
+      const contextFileIds = editFiles ?? [
+        ...new Set([...requestedFileIds, ...inheritedSGFileIds]),
+      ];
+      const boundFiles = await bindSGDraftFiles({
+        files: authorizedFiles,
+        fileIds: contextFileIds,
+        conversationId: req.body.conversationId,
+        endpointConfig: {
+          ...customEndpointConfig,
+          apiKey: extractEnvVariable(customEndpointConfig.apiKey),
+          baseURL: extractEnvVariable(customEndpointConfig.baseURL),
+        },
         tenantId: req.user.tenantId,
         userId: req.user.id,
-        messageId: req.body.messageId,
+        allowedAddresses: req.config?.endpoints?.allowedAddresses,
+        updateFile: db.updateFile,
+        hasForeignReferences: async (fileIds) => {
+          const references = await db.getMessages(
+            {
+              user: req.user.id,
+              conversationId: { $ne: req.body.conversationId },
+              'files.file_id': { $in: fileIds },
+            },
+            'messageId',
+          );
+          return (references ?? []).length > 0;
+        },
+      });
+      sgInternal = buildSGInternalContext({
+        requestFiles: contextFileIds.map((file_id) => ({ file_id })),
+        authorizedFiles: boundFiles,
+        conversationId: req.body.conversationId,
+        tenantId: req.user.tenantId,
+        userId: req.user.id,
+        messageId: sgRequestMessageId,
         endpoint: primaryAgent.provider,
       });
+    }
+    if (!sgInternal && req.body.conversationId) {
+      sgInternal = {
+        tenant_id: toSGScopeToken(req.user.tenantId, 'tenant'),
+        user_id: toSGScopeToken(req.user.id, 'user'),
+        conversation_id: toSGScopeToken(req.body.conversationId, 'conversation'),
+        message_id: toSGScopeToken(sgRequestMessageId, 'message'),
+        file_ids: [],
+      };
+    }
+    if (sgInternal) {
+      sgArtifactSink.terminalSnapshot = (requestMessageId, responseMessageId) =>
+        loadSGTerminalSnapshot({
+          userId: req.user.id,
+          conversationId: req.body.conversationId,
+          requestMessageId: requestMessageId ?? sgRequestMessageId,
+          responseMessageId,
+          methods: db,
+        });
+      Object.assign(
+        sgArtifactSink,
+        createSGGenerationCheckpoint(
+          {
+            userId: req.user.id,
+            conversationId: req.body.conversationId,
+            messageId: sgRequestMessageId,
+            provider: primaryAgent.provider,
+            text: req.body.text,
+            isTemporary: req.body.isTemporary,
+          },
+          db,
+        ),
+      );
+      sgArtifactSink.register = async (metadata) =>
+        registerSGArtifacts({
+          metadata,
+          retention: await getRetentionExpiry(req),
+          endpointConfig: {
+            ...customEndpointConfig,
+            apiKey: extractEnvVariable(customEndpointConfig.apiKey),
+            baseURL: extractEnvVariable(customEndpointConfig.baseURL),
+          },
+          scope: {
+            tenantId: req.user.tenantId,
+            userId: req.user.id,
+            conversationId: req.body.conversationId,
+            gatewayConversationId: sgInternal.conversation_id,
+            requestMessageId: sgRequestMessageId,
+          },
+          createFile: db.createFile,
+          allowedAddresses: req.config?.endpoints?.allowedAddresses,
+        });
     }
   }
 
@@ -1191,6 +1292,7 @@ const initializeClient = async ({
     contextUsageSink,
     usageEmitSink,
     sgCitationSink,
+    sgArtifactSink,
     startupTelemetry,
     toolInputValidationErrors,
     jobCreatedAt,

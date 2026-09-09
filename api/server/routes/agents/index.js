@@ -13,6 +13,11 @@ const {
   attachAskUserQuestionAnswers,
   attachAskUserQuestionArgs,
   createMessageFilterPii,
+  filterSGResumeFiles,
+  filterSGPendingSteerFiles,
+  needsSGReplayRefresh,
+  refreshSGReplayFinal,
+  sanitizeMessageForTransmit,
 } = require('@librechat/api');
 const { createSseStreamTelemetry } = require('@librechat/api/telemetry');
 const { logger } = require('@librechat/data-schemas');
@@ -33,7 +38,8 @@ const {
   getServerGenerationProtocol,
   negotiateExistingGenerationProtocol,
 } = require('~/server/controllers/agents/protocol');
-const { saveMessage } = require('~/models');
+const db = require('~/models');
+const { saveMessage, isResourceWriteBlocked } = db;
 const responses = require('./responses');
 const openai = require('./openai');
 const { v1 } = require('./v1');
@@ -88,7 +94,13 @@ async function sendJoblessStatus(req, res, conversationId) {
   return res.json({
     active: false,
     generationProtocolVersion,
-    ...(claimed.steers.length > 0 && { unrecoveredSteers: claimed.steers }),
+    ...(claimed.steers.length > 0 && {
+      unrecoveredSteers: await filterSGPendingSteerFiles({
+        userId: req.user.id,
+        steers: claimed.steers,
+        methods: db,
+      }),
+    }),
   });
 }
 
@@ -208,6 +220,16 @@ router.get('/chat/stream/:streamId', async (req, res) => {
     logger.warn(`[AgentStream] Refusing stream with invalid generation identity: ${streamId}`);
     return sendGenerationJson(res, 403, { error: 'Unauthorized' }, requestProtocolVersion);
   }
+  const conversationDeleted = await isResourceWriteBlocked(req.user.id, [streamId]);
+  if (attachmentAbortController.signal.aborted) return;
+  if (conversationDeleted) {
+    return sendGenerationJson(
+      res,
+      404,
+      { error: 'Conversation not found' },
+      generationProtocolVersion,
+    );
+  }
   const streamTelemetry = createSseStreamTelemetry({ req, res, streamId, isResume });
 
   res.setHeader('Content-Encoding', 'identity');
@@ -221,7 +243,9 @@ router.get('/chat/stream/:streamId', async (req, res) => {
 
   logger.debug(`[AgentStream] Client subscribed to ${streamId}, resume: ${isResume}`);
 
+  let terminalDeliveryPending = false;
   const writeEvent = (event, options = {}) => {
+    if (terminalDeliveryPending && !options.final && options.eventName !== 'error') return false;
     if (generationProtocolVersion < GENERATION_PROTOCOL_V2 && event?.event === 'on_steer_updated') {
       return true;
     }
@@ -239,7 +263,7 @@ router.get('/chat/stream/:streamId', async (req, res) => {
     return false;
   };
 
-  const onDone = (event) => {
+  const emitDone = (event) => {
     streamTelemetry.recordFinalEventEmitted();
     if (event?.reconcile === true && generationProtocolVersion < GENERATION_PROTOCOL_V2) {
       /** Legacy clients treat an ordinary `final: true` as the completion of
@@ -281,16 +305,67 @@ router.get('/chat/stream/:streamId', async (req, res) => {
     }
   };
 
+  const onDone = (event) => {
+    if (terminalDeliveryPending || attachmentAbortController.signal.aborted || res.writableEnded)
+      return;
+    terminalDeliveryPending = true;
+    if (!needsSGReplayRefresh(event)) {
+      emitDone(event);
+      return;
+    }
+    refreshSGReplayFinal({ userId: req.user.id, conversationId: streamId, event, methods: db })
+      .then((fresh) => {
+        if (attachmentAbortController.signal.aborted || res.writableEnded) return;
+        emitDone({ ...fresh, requestMessage: sanitizeMessageForTransmit(fresh.requestMessage) });
+      })
+      .catch(() => {
+        if (attachmentAbortController.signal.aborted || res.writableEnded) return;
+        emitDone({
+          final: true,
+          reconcile: true,
+          reconcileReason: 'terminal_payload_missing',
+          generationCreatedAt: authorizedGenerationCreatedAt,
+          conversation: { conversationId: streamId },
+        });
+      });
+  };
+
   if (isResume) {
     const { subscription, resumeState, pendingEvents } =
       await GenerationJobManager.subscribeWithResume(streamId, writeEvent, onDone, onError, {
         signal: attachmentAbortController.signal,
         expectedCreatedAt: authorizedGenerationCreatedAt,
       });
+    result = subscription;
 
-    if (subscription && !attachmentAbortController.signal.aborted && !res.writableEnded) {
+    if (
+      subscription &&
+      !attachmentAbortController.signal.aborted &&
+      !res.writableEnded &&
+      !terminalDeliveryPending
+    ) {
       if (resumeState) {
-        writeEvent({ sync: true, resumeState, pendingEvents });
+        let publicState;
+        try {
+          publicState = await filterSGResumeFiles({
+            userId: req.user.id,
+            state: resumeState,
+            methods: db,
+          });
+        } catch {
+          subscription.unsubscribe();
+          onError('Unable to refresh generation state');
+          return;
+        }
+        if (
+          attachmentAbortController.signal.aborted ||
+          res.writableEnded ||
+          terminalDeliveryPending
+        ) {
+          subscription.unsubscribe();
+          return;
+        }
+        writeEvent({ sync: true, resumeState: publicState, pendingEvents });
         GenerationJobManager.markSyncSent(streamId, authorizedGenerationCreatedAt);
         logger.debug(
           `[AgentStream] Sent sync event for ${streamId} with ${resumeState.runSteps.length} run steps, ${pendingEvents.length} pending events`,
@@ -320,6 +395,7 @@ router.get('/chat/stream/:streamId', async (req, res) => {
     result?.unsubscribe();
     return;
   }
+  if (terminalDeliveryPending) return;
   if (!result) {
     streamTelemetry.recordSubscribeFailed();
     {
@@ -400,6 +476,14 @@ router.get('/chat/active', async (req, res) => {
 router.get('/chat/status/:conversationId', async (req, res) => {
   const { conversationId } = req.params;
   const requestProtocolVersion = negotiateRequestGenerationProtocol(req);
+  if (await isResourceWriteBlocked(req.user.id, [conversationId])) {
+    return sendGenerationJson(
+      res,
+      404,
+      { error: 'Conversation not found' },
+      requestProtocolVersion,
+    );
+  }
 
   // streamId === conversationId, so we can use getJob directly
   let job = await GenerationJobManager.getJob(conversationId);
@@ -447,6 +531,22 @@ router.get('/chat/status/:conversationId', async (req, res) => {
     return sendGenerationJson(res, 503, { code: 'SERVER_NOT_READY' }, requestProtocolVersion);
   }
 
+  if (resumeState)
+    resumeState = await filterSGResumeFiles({
+      userId: req.user.id,
+      state: resumeState,
+      methods: db,
+    });
+
+  if (await isResourceWriteBlocked(req.user.id, [conversationId])) {
+    return sendGenerationJson(
+      res,
+      404,
+      { error: 'Conversation not found' },
+      requestProtocolVersion,
+    );
+  }
+
   /** Abort has won terminal ownership, but its required message/checkpoint
    * persistence has not finished yet. Reporting this snapshot as inactive
    * would let a reloading client clear its live state and refetch history
@@ -492,7 +592,11 @@ router.get('/chat/status/:conversationId', async (req, res) => {
         claimed.generationProtocolVersion,
       );
       res.set(GENERATION_PROTOCOL_HEADER, String(generationProtocolVersion));
-      unrecoveredSteers = claimed.steers;
+      unrecoveredSteers = await filterSGPendingSteerFiles({
+        userId: req.user.id,
+        steers: claimed.steers,
+        methods: db,
+      });
     }
   }
 

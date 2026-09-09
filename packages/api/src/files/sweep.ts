@@ -5,14 +5,16 @@ import {
   defaultAssistantsVersion,
 } from 'librechat-data-provider';
 import type { AppConfig } from '@librechat/data-schemas';
+import type { SGFileMetadata } from 'librechat-data-provider';
 
 const DEFAULT_FILE_RETENTION_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 
-type ExpiredFile = {
+export type ExpiredFile = {
   file_id: string;
   source?: string;
   user?: string | { toString?: () => string };
   tenantId?: string;
+  metadata?: { sgGateway?: SGFileMetadata };
 };
 
 type SweepRequest = {
@@ -46,6 +48,7 @@ type VersionedEndpointConfig = {
 };
 
 type SweepDependencies = {
+  deleteExpiredSGFile?: (file: ExpiredFile) => Promise<{ retained: boolean; fileIds: string[] }>;
   getExpiredFiles: (limit: number) => Promise<ExpiredFile[] | null | undefined>;
   processDeleteRequest: (params: {
     req: SweepRequest;
@@ -70,6 +73,7 @@ export type ExpiredFileSweepResult = {
   scanned: number;
   deleted: number;
   failed: number;
+  retained?: number;
 };
 
 export function getFileRetentionSweepInterval(
@@ -205,12 +209,14 @@ export async function resolveExpiredFileSweepConfig({
 
 export async function sweepExpiredFiles(
   { appConfig, limit = 100, loadAppConfig }: ExpiredFileSweepOptions | undefined = {},
-  { getExpiredFiles, processDeleteRequest, logger }: SweepDependencies,
+  { getExpiredFiles, processDeleteRequest, deleteExpiredSGFile, logger }: SweepDependencies,
 ): Promise<ExpiredFileSweepResult> {
   const files = (await getExpiredFiles(limit)) ?? [];
   let resolvedAppConfig = appConfig;
   let deleted = 0;
   let failed = 0;
+  let retained = 0;
+  const resolvedIds = new Set<string>();
 
   for (const file of files) {
     const userId = typeof file.user === 'string' ? file.user : file.user?.toString?.();
@@ -221,6 +227,24 @@ export async function sweepExpiredFiles(
     }
 
     try {
+      const resolvedKey = (id: string) =>
+        JSON.stringify([file.tenantId ?? '', userId, file.metadata?.sgGateway?.endpoint ?? '', id]);
+      if (file.source === FileSources.sg_gateway && resolvedIds.has(resolvedKey(file.file_id))) {
+        deleted++;
+        continue;
+      }
+      if (file.source === FileSources.sg_gateway) {
+        if (!deleteExpiredSGFile) throw new Error('sg_expiry_handler_required');
+        const result = await deleteExpiredSGFile(file);
+        if (result.retained) {
+          retained++;
+          continue;
+        }
+        if (!result.fileIds.includes(file.file_id)) throw new Error('sg_expiry_not_completed');
+        for (const id of result.fileIds) resolvedIds.add(resolvedKey(id));
+        deleted++;
+        continue;
+      }
       resolvedAppConfig = await resolveExpiredFileSweepConfig({
         appConfig: resolvedAppConfig,
         file,
@@ -247,13 +271,13 @@ export async function sweepExpiredFiles(
     }
   }
 
-  if (deleted > 0 || failed > 0) {
+  if (deleted > 0 || failed > 0 || retained > 0) {
     logger.info(
-      `[sweepExpiredFiles] Processed ${files.length} expired files: ${deleted} deleted, ${failed} failed`,
+      `[sweepExpiredFiles] Processed ${files.length} expired files: ${deleted} deleted, ${failed} failed${retained ? `, ${retained} retained` : ''}`,
     );
   }
 
-  return { scanned: files.length, deleted, failed };
+  return { scanned: files.length, deleted, failed, ...(retained > 0 && { retained }) };
 }
 
 export function startExpiredFileSweep(

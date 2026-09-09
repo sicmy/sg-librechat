@@ -226,6 +226,7 @@ export function getOpenAIConfig(
   }
   if (options.customParams?.sgFileGateway === true) {
     llmConfig.__includeRawResponse = true;
+    llmConfig.maxRetries = 0;
   }
 
   const configOptions: t.OpenAIConfiguration = {};

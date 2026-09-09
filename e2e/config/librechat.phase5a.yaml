@@ -1,0 +1,23 @@
+version: 1.3.14
+cache: true
+
+interface:
+  modelSelect: false
+  parameters: false
+
+endpoints:
+  allowedAddresses:
+    - '127.0.0.1:4020'
+  custom:
+    - name: SG AI Gateway
+      apiKey: '${SG_GATEWAY_API_KEY}'
+      baseURL: http://127.0.0.1:4020/v1
+      models:
+        default:
+          - default
+        fetch: true
+      titleConvo: false
+      modelDisplayLabel: SG AI Gateway
+      customParams:
+        defaultParamsEndpoint: custom
+        sgFileGateway: true

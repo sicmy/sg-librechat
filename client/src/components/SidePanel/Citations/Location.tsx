@@ -1,5 +1,6 @@
 import type { SGCitationLocator } from 'librechat-data-provider';
 import { useLocalize } from '~/hooks';
+import { formatJsonPath } from './path';
 
 export default function CitationLocation({ locator }: { locator: SGCitationLocator }) {
   const localize = useLocalize();
@@ -44,15 +45,20 @@ export default function CitationLocation({ locator }: { locator: SGCitationLocat
     );
   }
   if (locator.kind === 'structural_path') {
-    return <>{locator.path}</>;
+    return <>{locator.path_type === 'json' ? formatJsonPath(locator.path) : locator.path}</>;
   }
   if (locator.kind === 'timestamp') {
     return (
       <>
-        {localize('com_sg_citation_time_range', {
-          start: Math.floor(locator.start_ms / 1000),
-          end: Math.ceil(locator.end_ms / 1000),
-        })}
+        {locator.start_ms === locator.end_ms
+          ? localize('com_sg_citation_time', { time: locator.start_ms / 1000 })
+          : localize('com_sg_citation_time_range', {
+              start: Math.floor(locator.start_ms / 1000),
+              end: Math.ceil(locator.end_ms / 1000),
+            })}
+        {locator.frame_number != null && (
+          <> · {localize('com_sg_citation_frame', { frame: locator.frame_number })}</>
+        )}
       </>
     );
   }

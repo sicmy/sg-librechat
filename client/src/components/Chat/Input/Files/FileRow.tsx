@@ -1,9 +1,15 @@
-import { useEffect } from 'react';
-import { useToastContext } from '@librechat/client';
+import { useCallback, useEffect } from 'react';
+import { Button, useToastContext } from '@librechat/client';
 import { CircleAlert, CircleCheck, LoaderCircle } from 'lucide-react';
 import { EToolResources, FileSources } from 'librechat-data-provider';
 import type { ExtendedFile } from '~/common';
-import { useDeleteFilesMutation, useFilePreview, useRetrySGFileMutation } from '~/data-provider';
+import type { TFilePreview } from 'librechat-data-provider';
+import {
+  useDeleteFilesMutation,
+  useFilePreview,
+  useRetrySGFileMutation,
+  useCancelSGFileMutation,
+} from '~/data-provider';
 import { logger, getCachedPreview, isBlockingFileUpload } from '~/utils';
 import { useFileDeletion } from '~/hooks/Files';
 import FileContainer from './FileContainer';
@@ -19,7 +25,7 @@ export const FileRowWrapper = ({ children }: { children: React.ReactNode }) => (
   <div className="flex flex-wrap gap-2">{children}</div>
 );
 
-function SGFileContainer({
+export function SGFileContainer({
   file,
   setFiles,
   onDelete,
@@ -29,61 +35,75 @@ function SGFileContainer({
   onDelete: (status?: ExtendedFile['status']) => void;
 }) {
   const localize = useLocalize();
+  const { showToast } = useToastContext();
   const baseStatus = file.status ?? 'pending';
-  const statusQuery = useFilePreview(file.file_id, { enabled: baseStatus === 'pending' });
+  const statusQuery = useFilePreview(file.file_id, {
+    enabled: baseStatus !== 'ready',
+    refetchOnReconnect: true,
+    refetchOnWindowFocus: true,
+  });
   const retryMutation = useRetrySGFileMutation();
+  const cancelMutation = useCancelSGFileMutation();
+  const busy = retryMutation.isLoading || cancelMutation.isLoading;
   const status = retryMutation.isLoading ? 'pending' : (statusQuery.data?.status ?? baseStatus);
+  const gateway = statusQuery.data?.sgGateway ?? file.metadata?.sgGateway;
+  const canRetry = status === 'failed' && gateway?.retryable === true;
+  const errorCode = statusQuery.data?.previewError ?? file.previewError;
+
+  const applyStatus = useCallback(
+    (result: TFilePreview) => {
+      setFiles((current) => {
+        const existing = current.get(file.file_id);
+        if (
+          !existing ||
+          (existing.status === result.status &&
+            existing.previewError === result.previewError &&
+            existing.metadata?.sgGateway?.state === result.sgGateway?.state &&
+            existing.metadata?.sgGateway?.retryable === result.sgGateway?.retryable &&
+            existing.progress === (result.status === 'pending' ? 0.9 : 1))
+        ) {
+          return current;
+        }
+        const next = new Map(current);
+        next.set(file.file_id, {
+          ...existing,
+          status: result.status,
+          previewError: result.previewError,
+          metadata: {
+            ...existing.metadata,
+            sgGateway: result.sgGateway ?? existing.metadata?.sgGateway,
+          },
+          progress: result.status === 'pending' ? 0.9 : 1,
+        });
+        return next;
+      });
+    },
+    [file.file_id, setFiles],
+  );
 
   useEffect(() => {
-    if (!statusQuery.data || statusQuery.data.status === 'pending') {
-      return;
+    if (statusQuery.data) {
+      applyStatus(statusQuery.data);
     }
-    setFiles((current) => {
-      const existing = current.get(file.file_id);
-      if (
-        !existing ||
-        (existing.status === statusQuery.data?.status &&
-          existing.previewError === statusQuery.data?.previewError &&
-          existing.progress === 1)
-      ) {
-        return current;
-      }
-      const next = new Map(current);
-      next.set(file.file_id, {
-        ...existing,
-        status: statusQuery.data.status,
-        previewError: statusQuery.data.previewError,
-        progress: 1,
-      });
-      return next;
-    });
-  }, [file.file_id, setFiles, statusQuery.data]);
+  }, [applyStatus, statusQuery.data]);
 
-  const retry = () => {
-    if (status !== 'failed' || retryMutation.isLoading) {
+  const changeStatus = (action: 'retry' | 'cancel') => {
+    if (busy || (action === 'retry' ? !canRetry : status !== 'pending')) {
       return;
     }
-    retryMutation.mutate(file.file_id, {
-      onSuccess: (result) => {
-        setFiles((current) => {
-          const existing = current.get(file.file_id);
-          if (!existing) {
-            return current;
-          }
-          const next = new Map(current);
-          next.set(file.file_id, {
-            ...existing,
-            status: result.status,
-            previewError: result.previewError,
-            progress: result.status === 'pending' ? 0.9 : 1,
-          });
-          return next;
-        });
+    (action === 'retry' ? retryMutation : cancelMutation).mutate(file.file_id, {
+      onSuccess: applyStatus,
+      onError: () => {
+        showToast({ message: localize('com_ui_sg_file_action_failed'), status: 'error' });
+        void statusQuery.refetch();
       },
     });
   };
 
   const subtitle = (() => {
+    if (statusQuery.isError) {
+      return <span>{localize('com_ui_sg_file_status_unavailable')}</span>;
+    }
     if (status === 'ready') {
       return (
         <div className="flex items-center gap-1 text-status-success">
@@ -93,28 +113,73 @@ function SGFileContainer({
       );
     }
     if (status === 'failed') {
+      const failureKey = canRetry ? 'com_agents_error_retry' : 'com_ui_sg_file_unprocessable';
       return (
         <div className="flex items-center gap-1 text-text-destructive">
           <CircleAlert className="size-3.5" aria-hidden="true" />
-          <span>{localize('com_agents_error_retry')}</span>
+          <span>
+            {localize(errorCode === 'job_cancelled' ? 'com_ui_sg_file_cancelled' : failureKey)}
+          </span>
         </div>
       );
     }
     return (
       <div className="flex items-center gap-1 text-text-secondary">
-        <LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />
+        <LoaderCircle
+          className="size-3.5 animate-spin motion-reduce:animate-none"
+          aria-hidden="true"
+        />
         <span>{localize('com_ui_analyzing')}</span>
       </div>
     );
   })();
 
   return (
-    <FileContainer
-      file={file}
-      subtitle={subtitle}
-      onClick={status === 'failed' ? retry : undefined}
-      onDelete={() => onDelete(status)}
-    />
+    <div className="flex flex-col items-start gap-1">
+      <FileContainer
+        file={file}
+        subtitle={
+          <div role="status" aria-live="polite">
+            {subtitle}
+          </div>
+        }
+        onClick={canRetry && !busy ? () => changeStatus('retry') : undefined}
+        onDelete={busy ? undefined : () => onDelete(status)}
+      />
+      {status === 'pending' && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={busy}
+          onClick={() => changeStatus('cancel')}
+        >
+          {localize('com_ui_sg_file_cancel')}
+        </Button>
+      )}
+      {canRetry && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={busy}
+          onClick={() => changeStatus('retry')}
+        >
+          {localize('com_ui_sg_file_retry')}
+        </Button>
+      )}
+      {statusQuery.isError && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={busy || statusQuery.isFetching}
+          onClick={() => void statusQuery.refetch()}
+        >
+          {localize('com_ui_sg_file_check_status')}
+        </Button>
+      )}
+    </div>
   );
 }
 

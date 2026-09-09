@@ -3,16 +3,35 @@ import { useRecoilState } from 'recoil';
 import { Button } from '@librechat/client';
 import { Download, FileText, LocateFixed, X } from 'lucide-react';
 import type { SGTypedCitation } from 'librechat-data-provider';
-import { useSGCitationDownload, useSGCitationPage } from '~/data-provider/Files/queries';
+import {
+  useSGCitationDownload,
+  useSGCitationImage,
+  useSGCitationFrame,
+  useSGCitationPage,
+} from '~/data-provider/Files/queries';
 import { triggerDownload } from '~/utils';
 import CitationLocation from './Location';
 import { useLocalize } from '~/hooks';
 import store from '~/store';
 
-function PagePreview({ citation }: { citation: SGTypedCitation }) {
+type CitationBox = Extract<SGTypedCitation['locator'], { kind: 'image' }>['bbox'];
+
+const toPercent = (value: number) => `${Number((value * 100).toFixed(4))}%`;
+
+function BlobPreview({
+  alt,
+  box,
+  data,
+  isLoading,
+  isError,
+}: {
+  alt: string;
+  box?: CitationBox;
+  data?: Blob;
+  isLoading: boolean;
+  isError: boolean;
+}) {
   const localize = useLocalize();
-  const pageNumber = citation.locator.kind === 'page' ? citation.locator.page_number : undefined;
-  const { data, isLoading, isError } = useSGCitationPage(citation.file_id, pageNumber);
   const [url, setUrl] = useState<string | null>(null);
 
   useEffect(() => {
@@ -41,34 +60,77 @@ function PagePreview({ citation }: { citation: SGTypedCitation }) {
     );
   }
 
-  const box = citation.locator.kind === 'page' ? citation.locator.bbox : null;
-
   return (
     <div className="overflow-auto rounded-xl border border-border-light bg-surface-secondary p-3">
       <div className="relative mx-auto w-fit max-w-full overflow-hidden rounded-lg shadow-sm">
-        <img
-          src={url}
-          alt={localize('com_sg_citation_page_preview', {
-            name: citation.display_name,
-            page: pageNumber,
-          })}
-          className="block max-h-[52vh] max-w-full object-contain"
-        />
+        <img src={url} alt={alt} className="block max-h-[52vh] max-w-full object-contain" />
         {box && (
           <span
             data-testid="sg-citation-highlight"
             className="pointer-events-none absolute border-2 border-text-primary bg-surface-active/20 shadow-sm"
             style={{
-              left: `${box.left * 100}%`,
-              top: `${box.top * 100}%`,
-              width: `${(box.right - box.left) * 100}%`,
-              height: `${(box.bottom - box.top) * 100}%`,
+              left: toPercent(box.left),
+              top: toPercent(box.top),
+              width: toPercent(box.right - box.left),
+              height: toPercent(box.bottom - box.top),
             }}
             aria-hidden="true"
           />
         )}
       </div>
     </div>
+  );
+}
+
+function PagePreview({ citation }: { citation: SGTypedCitation }) {
+  const localize = useLocalize();
+  const pageNumber = citation.locator.kind === 'page' ? citation.locator.page_number : undefined;
+  const query = useSGCitationPage(citation.file_id, pageNumber);
+  const box = citation.locator.kind === 'page' ? citation.locator.bbox : null;
+  return (
+    <BlobPreview
+      alt={localize('com_sg_citation_page_preview', {
+        name: citation.display_name,
+        page: pageNumber,
+      })}
+      box={box}
+      data={query.data}
+      isLoading={query.isLoading}
+      isError={query.isError}
+    />
+  );
+}
+
+function ImagePreview({ citation }: { citation: SGTypedCitation }) {
+  const localize = useLocalize();
+  const query = useSGCitationImage(citation.file_id);
+  const box = citation.locator.kind === 'image' ? citation.locator.bbox : null;
+  return (
+    <BlobPreview
+      alt={localize('com_sg_citation_image_preview', { name: citation.display_name })}
+      box={box}
+      data={query.data}
+      isLoading={query.isLoading}
+      isError={query.isError}
+    />
+  );
+}
+
+function FramePreview({ citation }: { citation: SGTypedCitation }) {
+  const localize = useLocalize();
+  const locator = citation.locator.kind === 'timestamp' ? citation.locator : undefined;
+  const query = useSGCitationFrame(citation.file_id, locator?.frame_number ?? undefined);
+  return (
+    <BlobPreview
+      alt={localize('com_sg_citation_frame_preview', {
+        name: citation.display_name,
+        frame: locator?.frame_number ?? 0,
+      })}
+      box={locator?.bbox}
+      data={query.data}
+      isLoading={query.isLoading}
+      isError={query.isError}
+    />
   );
 }
 
@@ -112,7 +174,26 @@ export default function CitationPanel() {
     return null;
   }
 
-  const canPreview = selected.mime_type === 'application/pdf' && selected.locator.kind === 'page';
+  const isPagePreview =
+    selected.mime_type === 'application/pdf' && selected.locator.kind === 'page';
+  const isImagePreview =
+    selected.mime_type.startsWith('image/') && selected.locator.kind === 'image';
+  let preview = (
+    <div className="rounded-xl border border-border-light bg-surface-secondary p-4 text-sm text-text-secondary">
+      {localize('com_sg_citation_no_visual_preview')}
+    </div>
+  );
+  if (isPagePreview) {
+    preview = <PagePreview citation={selected} />;
+  } else if (isImagePreview) {
+    preview = <ImagePreview citation={selected} />;
+  } else if (
+    selected.mime_type.startsWith('video/') &&
+    selected.locator.kind === 'timestamp' &&
+    selected.locator.frame_number != null
+  ) {
+    preview = <FramePreview citation={selected} />;
+  }
 
   return (
     <aside
@@ -176,13 +257,7 @@ export default function CitationPanel() {
             </Button>
           </div>
 
-          {canPreview ? (
-            <PagePreview citation={selected} />
-          ) : (
-            <div className="rounded-xl border border-border-light bg-surface-secondary p-4 text-sm text-text-secondary">
-              {localize('com_sg_citation_no_visual_preview')}
-            </div>
-          )}
+          {preview}
 
           <blockquote className="mt-3 border-l-2 border-border-heavy pl-3 text-sm leading-6 text-text-primary">
             {selected.quote}

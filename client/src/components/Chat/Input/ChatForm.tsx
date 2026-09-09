@@ -34,6 +34,7 @@ import PendingSteerChips from './PendingSteerChips';
 import PendingQuoteChips from './PendingQuoteChips';
 import AttachFileChat from './Files/AttachFileChat';
 import EffortSelector from '../EffortSelector';
+import GenerateMediaButton from './GenerateMediaButton';
 import useSteering from '~/hooks/Chat/useSteering';
 import FileFormChat from './Files/FileFormChat';
 import InFlightSteers from './InFlightSteers';
@@ -654,6 +655,9 @@ const ChatForm = memo(function ChatForm({
                     setFilesLoading={setFilesLoading}
                   />
                   <EffortSelector disabled={disableInputs} />
+                  <GenerateMediaButton disabled={disableInputs} />
+                  <GenerateMediaButton disabled={disableInputs} operation="edit" />
+                  <GenerateMediaButton disabled={disableInputs} operation="speech" />
                 </div>
                 <BadgeRow
                   showEphemeralBadges={

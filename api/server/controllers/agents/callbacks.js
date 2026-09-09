@@ -17,6 +17,7 @@ const {
 } = require('@librechat/agents');
 const {
   sendEvent,
+  extractSGArtifactMetadata,
   computeUsageCostUSD,
   GenerationJobManager,
   writeAttachmentEvent,
@@ -109,6 +110,7 @@ class ModelEndHandler {
     collectedThoughtSignatures = null,
     emitUsage = null,
     sgCitationSink = null,
+    sgArtifactSink = null,
   ) {
     if (!Array.isArray(collectedUsage)) {
       throw new Error('collectedUsage must be an array');
@@ -117,6 +119,7 @@ class ModelEndHandler {
     this.collectedThoughtSignatures = collectedThoughtSignatures;
     this.emitUsage = emitUsage;
     this.sgCitationSink = sgCitationSink;
+    this.sgArtifactSink = sgArtifactSink;
   }
 
   finalize(errorMessage) {
@@ -158,6 +161,12 @@ class ModelEndHandler {
       }
 
       captureSGCitationMetadata(data?.output, this.sgCitationSink);
+      if (this.sgArtifactSink) {
+        const artifacts = extractSGArtifactMetadata(data?.output);
+        if (artifacts) {
+          this.sgArtifactSink.latest = artifacts;
+        }
+      }
 
       const usage = data?.output?.usage_metadata;
       if (!usage) {
@@ -409,6 +418,7 @@ function getDefaultHandlers({
   contextUsageSink = null,
   usageEmitSink = null,
   sgCitationSink = null,
+  sgArtifactSink = null,
 }) {
   if (!res || !aggregateContent) {
     throw new Error(
@@ -452,6 +462,12 @@ function getDefaultHandlers({
     [GraphEvents.CHAT_MODEL_STREAM]: {
       handle: async (_event, data) => {
         captureSGCitationMetadata(data?.chunk, sgCitationSink);
+        if (sgArtifactSink) {
+          const artifacts = extractSGArtifactMetadata(data?.chunk);
+          if (artifacts) {
+            sgArtifactSink.latest = artifacts;
+          }
+        }
       },
     },
     [GraphEvents.CHAT_MODEL_END]: new ModelEndHandler(
@@ -459,6 +475,7 @@ function getDefaultHandlers({
       collectedThoughtSignatures,
       emitTokenUsage,
       sgCitationSink,
+      sgArtifactSink,
     ),
     [GraphEvents.TOOL_END]: new ToolEndHandler(toolEndCallback, logger),
     [GraphEvents.ON_RUN_STEP]: {

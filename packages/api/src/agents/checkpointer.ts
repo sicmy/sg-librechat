@@ -817,10 +817,12 @@ export async function deleteAgentCheckpoint(
  * the backstop for anything this misses).
  *
  * @param threadIds - LangGraph `thread_id`s (LibreChat conversationIds); falsy entries skipped.
+ * @param strict - Propagate cleanup errors to a durable deletion worker instead of relying on TTL.
  */
 export async function deleteAgentCheckpoints(
   threadIds: Array<string | null | undefined> | undefined,
   cfg?: TCheckpointerConfig,
+  strict = false,
 ): Promise<void> {
   const ids = (threadIds ?? []).filter((id): id is string => Boolean(id));
   if (ids.length === 0) {
@@ -844,6 +846,7 @@ export async function deleteAgentCheckpoints(
         .deleteMany({ thread_id: { $in: ids } }),
     ]);
   } catch (err) {
+    if (strict) throw err;
     logger.warn(
       `[checkpointer] Failed to bulk-delete checkpoints for ${ids.length} thread(s):`,
       err,

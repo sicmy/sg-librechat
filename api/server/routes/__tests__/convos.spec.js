@@ -24,14 +24,13 @@ describe('Convos Routes', () => {
   const {
     deleteToolCalls,
     deleteConvos,
-    deleteFile,
     getFiles,
     getMessages,
+    getConversationsForDeletion,
     saveConvo,
   } = require('~/models');
   const {
-    deleteAgentCheckpoints,
-    deleteSGGatewayConversation,
+    deleteSGConversationResources,
     deleteAllSharedLinksWithCleanup,
     deleteConvoSharedLinksWithCleanup,
   } = require('@librechat/api');
@@ -55,471 +54,106 @@ describe('Convos Routes', () => {
     jest.clearAllMocks();
     getMessages.mockResolvedValue([]);
     getFiles.mockResolvedValue([]);
+    getConversationsForDeletion.mockImplementation((_user, id) =>
+      Promise.resolve(id ? [id] : ['selected-conversation']),
+    );
+    deleteSGConversationResources.mockResolvedValue();
   });
 
-  describe('DELETE /all', () => {
-    it('prunes the deleted conversations’ agent checkpoints (bulk, ids from deleteConvos)', async () => {
-      // HITL: a paused conversation's durable checkpoint must not outlive the conversation.
-      const conversationIds = ['conv-a', 'conv-b'];
-      deleteConvos.mockResolvedValue({ deletedCount: 2, conversationIds });
-      deleteToolCalls.mockResolvedValue({ deletedCount: 0 });
-      deleteAllSharedLinksWithCleanup.mockResolvedValue({ deletedCount: 0 });
-
+  describe('journaled deletion routes', () => {
+    const { deleteSGConversations, SGFileGatewayError } = require('@librechat/api');
+    beforeEach(() => deleteSGConversations.mockReset());
+    it('passes an owned selection snapshot and the authenticated actor to bulk cleanup', async () => {
+      getConversationsForDeletion.mockResolvedValueOnce(['a', 'archived']);
+      const result = { acknowledged: true, deletedCount: 2, conversationIds: ['a', 'archived'] };
+      deleteSGConversations.mockResolvedValue(result);
       const response = await request(app).delete('/api/convos/all');
-
       expect(response.status).toBe(201);
-      expect(deleteAgentCheckpoints).toHaveBeenCalledTimes(1);
-      expect(deleteAgentCheckpoints.mock.calls[0][0]).toEqual(conversationIds);
-    });
-
-    it('should delete all conversations, tool calls, and shared links for a user', async () => {
-      const mockDbResponse = {
-        deletedCount: 5,
-        message: 'All conversations deleted successfully',
-      };
-
-      deleteConvos.mockResolvedValue(mockDbResponse);
-      deleteToolCalls.mockResolvedValue({ deletedCount: 10 });
-      deleteAllSharedLinksWithCleanup.mockResolvedValue({
-        message: 'All shared links deleted successfully',
-        deletedCount: 3,
-      });
-
-      const response = await request(app).delete('/api/convos/all');
-
-      expect(response.status).toBe(201);
-      expect(response.body).toEqual(mockDbResponse);
-
-      /** Verify deleteConvos was called with correct userId */
-      expect(deleteConvos).toHaveBeenCalledWith('test-user-123', {});
-      expect(deleteConvos).toHaveBeenCalledTimes(1);
-
-      /** Verify deleteToolCalls was called with correct userId */
-      expect(deleteToolCalls).toHaveBeenCalledWith('test-user-123');
-      expect(deleteToolCalls).toHaveBeenCalledTimes(1);
-
-      /** Verify deleteAllSharedLinksWithCleanup was called with correct userId */
-      expect(deleteAllSharedLinksWithCleanup).toHaveBeenCalledWith('test-user-123');
-      expect(deleteAllSharedLinksWithCleanup).toHaveBeenCalledTimes(1);
-    });
-
-    it('should call deleteAllSharedLinksWithCleanup even when no conversations exist', async () => {
-      const mockDbResponse = {
-        deletedCount: 0,
-        message: 'No conversations to delete',
-      };
-
-      deleteConvos.mockResolvedValue(mockDbResponse);
-      deleteToolCalls.mockResolvedValue({ deletedCount: 0 });
-      deleteAllSharedLinksWithCleanup.mockResolvedValue({
-        message: 'All shared links deleted successfully',
-        deletedCount: 0,
-      });
-
-      const response = await request(app).delete('/api/convos/all');
-
-      expect(response.status).toBe(201);
-      expect(deleteAllSharedLinksWithCleanup).toHaveBeenCalledWith('test-user-123');
-    });
-
-    it('should return 500 if deleteConvos fails', async () => {
-      const errorMessage = 'Database connection error';
-      deleteConvos.mockRejectedValue(new Error(errorMessage));
-
-      const response = await request(app).delete('/api/convos/all');
-
-      expect(response.status).toBe(500);
-      expect(response.text).toBe('Error clearing conversations');
-
-      /** Verify error was logged */
-      const { logger } = require('@librechat/data-schemas');
-      expect(logger.error).toHaveBeenCalledWith('Error clearing conversations', expect.any(Error));
-    });
-
-    it('should return 500 if deleteToolCalls fails', async () => {
-      deleteConvos.mockResolvedValue({ deletedCount: 5 });
-      deleteToolCalls.mockRejectedValue(new Error('Tool calls deletion failed'));
-
-      const response = await request(app).delete('/api/convos/all');
-
-      expect(response.status).toBe(500);
-      expect(response.text).toBe('Error clearing conversations');
-    });
-
-    it('should return 500 if deleteAllSharedLinksWithCleanup fails', async () => {
-      deleteConvos.mockResolvedValue({ deletedCount: 5 });
-      deleteToolCalls.mockResolvedValue({ deletedCount: 10 });
-      deleteAllSharedLinksWithCleanup.mockRejectedValue(new Error('Shared links deletion failed'));
-
-      const response = await request(app).delete('/api/convos/all');
-
-      expect(response.status).toBe(500);
-      expect(response.text).toBe('Error clearing conversations');
-    });
-
-    it('should handle multiple users independently', async () => {
-      /** First user */
-      deleteConvos.mockResolvedValue({ deletedCount: 3 });
-      deleteToolCalls.mockResolvedValue({ deletedCount: 5 });
-      deleteAllSharedLinksWithCleanup.mockResolvedValue({ deletedCount: 2 });
-
-      let response = await request(app).delete('/api/convos/all');
-
-      expect(response.status).toBe(201);
-      expect(deleteAllSharedLinksWithCleanup).toHaveBeenCalledWith('test-user-123');
-
-      jest.clearAllMocks();
-
-      /** Second user (simulate different user by modifying middleware) */
-      const app2 = express();
-      app2.use(express.json());
-      app2.use((req, res, next) => {
-        req.user = { id: 'test-user-456' };
-        next();
-      });
-      app2.use('/api/convos', require('../convos'));
-
-      deleteConvos.mockResolvedValue({ deletedCount: 7 });
-      deleteToolCalls.mockResolvedValue({ deletedCount: 12 });
-      deleteAllSharedLinksWithCleanup.mockResolvedValue({ deletedCount: 4 });
-
-      response = await request(app2).delete('/api/convos/all');
-
-      expect(response.status).toBe(201);
-      expect(deleteAllSharedLinksWithCleanup).toHaveBeenCalledWith('test-user-456');
-    });
-
-    it('should execute deletions in correct sequence', async () => {
-      const executionOrder = [];
-
-      deleteConvos.mockImplementation(() => {
-        executionOrder.push('deleteConvos');
-        return Promise.resolve({ deletedCount: 5 });
-      });
-
-      deleteToolCalls.mockImplementation(() => {
-        executionOrder.push('deleteToolCalls');
-        return Promise.resolve({ deletedCount: 10 });
-      });
-
-      deleteAllSharedLinksWithCleanup.mockImplementation(() => {
-        executionOrder.push('deleteAllSharedLinksWithCleanup');
-        return Promise.resolve({ deletedCount: 3 });
-      });
-
-      await request(app).delete('/api/convos/all');
-
-      /** Verify all three functions were called */
-      expect(executionOrder).toEqual([
-        'deleteConvos',
-        'deleteToolCalls',
-        'deleteAllSharedLinksWithCleanup',
-      ]);
-    });
-
-    it('should maintain data integrity by cleaning up shared links when conversations are deleted', async () => {
-      /** This test ensures that orphaned shared links are prevented */
-      const mockConvosDeleted = { deletedCount: 10 };
-      const mockToolCallsDeleted = { deletedCount: 15 };
-      const mockSharedLinksDeleted = {
-        message: 'All shared links deleted successfully',
-        deletedCount: 8,
-      };
-
-      deleteConvos.mockResolvedValue(mockConvosDeleted);
-      deleteToolCalls.mockResolvedValue(mockToolCallsDeleted);
-      deleteAllSharedLinksWithCleanup.mockResolvedValue(mockSharedLinksDeleted);
-
-      const response = await request(app).delete('/api/convos/all');
-
-      expect(response.status).toBe(201);
-
-      /** Verify that shared links cleanup was called for the same user */
-      expect(deleteAllSharedLinksWithCleanup).toHaveBeenCalledWith('test-user-123');
-
-      /** Verify no shared links remain for deleted conversations */
-      expect(deleteAllSharedLinksWithCleanup).toHaveBeenCalledAfter(deleteConvos);
-    });
-  });
-
-  describe('DELETE /', () => {
-    it('should delete a single conversation, tool calls, and associated shared links', async () => {
-      const mockConversationId = 'conv-123';
-      const mockDbResponse = {
-        deletedCount: 1,
-        message: 'Conversation deleted successfully',
-      };
-
-      deleteConvos.mockResolvedValue(mockDbResponse);
-      deleteToolCalls.mockResolvedValue({ deletedCount: 3 });
-      deleteConvoSharedLinksWithCleanup.mockResolvedValue({
-        message: 'Shared links deleted successfully',
-        deletedCount: 1,
-      });
-
-      const response = await request(app)
-        .delete('/api/convos')
-        .send({
-          arg: {
-            conversationId: mockConversationId,
-          },
-        });
-
-      expect(response.status).toBe(201);
-      expect(response.body).toEqual(mockDbResponse);
-
-      /** Verify deleteConvos was called with correct parameters */
-      expect(deleteConvos).toHaveBeenCalledWith('test-user-123', {
-        conversationId: mockConversationId,
-      });
-
-      /** Verify deleteToolCalls was called */
-      expect(deleteToolCalls).toHaveBeenCalledWith('test-user-123', mockConversationId);
-
-      /** Verify deleteConvoSharedLinksWithCleanup was called */
-      expect(deleteConvoSharedLinksWithCleanup).toHaveBeenCalledWith(
-        'test-user-123',
-        mockConversationId,
-      );
-    });
-
-    it('deletes each SG Gateway conversation scope before deleting the conversation', async () => {
-      const mockConversationId = 'conv-sg-files';
-      const executionOrder = [];
-      getMessages.mockResolvedValue([
-        {
-          files: [{ file_id: 'file_one' }, { file_id: 'file_two' }],
-        },
-      ]);
-      getFiles.mockResolvedValue([
-        {
-          file_id: 'file_one',
-          metadata: {
-            sgGateway: {
-              endpoint: 'SG AI Gateway',
-              conversationId: mockConversationId,
-            },
-          },
-        },
-        {
-          file_id: 'file_two',
-          metadata: {
-            sgGateway: {
-              endpoint: 'SG AI Gateway',
-              conversationId: mockConversationId,
-            },
-          },
-        },
-      ]);
-      deleteSGGatewayConversation.mockImplementation(() => {
-        executionOrder.push('deleteSGGatewayConversation');
-        return Promise.resolve();
-      });
-      deleteConvos.mockImplementation(() => {
-        executionOrder.push('deleteConvos');
-        return Promise.resolve({ deletedCount: 1 });
-      });
-      deleteToolCalls.mockResolvedValue({ deletedCount: 0 });
-      deleteConvoSharedLinksWithCleanup.mockResolvedValue({ deletedCount: 0 });
-
-      const response = await request(app)
-        .delete('/api/convos')
-        .send({ arg: { conversationId: mockConversationId } });
-
-      expect(response.status).toBe(201);
-      expect(getMessages).toHaveBeenCalledWith(
-        { user: 'test-user-123', conversationId: mockConversationId },
-        'files',
-        { sort: false },
-      );
-      expect(getFiles).toHaveBeenCalledWith({
-        user: 'test-user-123',
-        source: 'sg_gateway',
-        file_id: { $in: ['file_one', 'file_two'] },
-      });
-      expect(deleteSGGatewayConversation).toHaveBeenCalledTimes(1);
-      expect(deleteSGGatewayConversation).toHaveBeenCalledWith(
+      expect(response.body).toEqual(result);
+      expect(deleteSGConversations).toHaveBeenCalledWith(
         expect.objectContaining({
-          conversationId: mockConversationId,
           userId: 'test-user-123',
+          conversationIds: ['a', 'archived'],
+          methods: require('~/models'),
         }),
       );
-      expect(deleteFile).toHaveBeenCalledTimes(2);
-      expect(executionOrder).toEqual(['deleteSGGatewayConversation', 'deleteConvos']);
+      expect(deleteConvos).not.toHaveBeenCalled();
+      expect(deleteToolCalls).not.toHaveBeenCalled();
+      expect(deleteAllSharedLinksWithCleanup).not.toHaveBeenCalled();
     });
-
-    it('should not call deleteConvoSharedLinksWithCleanup when no conversationId provided', async () => {
-      deleteConvos.mockResolvedValue({ deletedCount: 0 });
-      deleteToolCalls.mockResolvedValue({ deletedCount: 0 });
-
+    it('delegates single deletion and durable retry to the owner-scoped service', async () => {
+      deleteSGConversations.mockResolvedValue({ deletedCount: 0, conversationIds: ['removed'] });
       const response = await request(app)
         .delete('/api/convos')
-        .send({
-          arg: {
-            source: 'button',
-          },
-        });
-
-      expect(response.status).toBe(200);
+        .send({ arg: { conversationId: 'removed', userId: 'forged' } });
+      expect(response.status).toBe(201);
+      expect(deleteSGConversations).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'test-user-123',
+          conversationIds: ['removed'],
+        }),
+      );
       expect(deleteConvoSharedLinksWithCleanup).not.toHaveBeenCalled();
     });
-
-    it('should handle deletion of conversation without shared links', async () => {
-      const mockConversationId = 'conv-no-shares';
-
-      deleteConvos.mockResolvedValue({ deletedCount: 1 });
-      deleteToolCalls.mockResolvedValue({ deletedCount: 0 });
-      deleteConvoSharedLinksWithCleanup.mockResolvedValue({
-        message: 'Shared links deleted successfully',
+    it('preserves a not-found refusal from the authoritative deletion service', async () => {
+      deleteSGConversations.mockRejectedValue(
+        new SGFileGatewayError(404, 'conversation_not_found'),
+      );
+      expect(
+        (
+          await request(app)
+            .delete('/api/convos')
+            .send({ arg: { conversationId: 'foreign' } })
+        ).status,
+      ).toBe(404);
+      expect(deleteConvos).not.toHaveBeenCalled();
+    });
+    it.each(['/api/convos', '/api/convos/all'])(
+      'reports cleanup failure from %s without claiming success',
+      async (url) => {
+        deleteSGConversations.mockRejectedValue(new Error('synthetic_failure'));
+        const response = await request(app)
+          .delete(url)
+          .send({ arg: { conversationId: 'selected' } });
+        expect(response.status).toBe(500);
+        expect(response.text).toBe('Error clearing conversations');
+      },
+    );
+    it('passes an empty bulk snapshot without unrestricted sibling deletion', async () => {
+      getConversationsForDeletion.mockResolvedValueOnce([]);
+      deleteSGConversations.mockResolvedValue({
+        acknowledged: true,
         deletedCount: 0,
+        conversationIds: [],
       });
-
-      const response = await request(app)
-        .delete('/api/convos')
-        .send({
-          arg: {
-            conversationId: mockConversationId,
-          },
-        });
-
-      expect(response.status).toBe(201);
-      expect(deleteConvoSharedLinksWithCleanup).toHaveBeenCalledWith(
-        'test-user-123',
-        mockConversationId,
+      expect((await request(app).delete('/api/convos/all')).status).toBe(201);
+      expect(deleteSGConversations).toHaveBeenCalledWith(
+        expect.objectContaining({ conversationIds: [] }),
       );
+      expect(deleteAllSharedLinksWithCleanup).not.toHaveBeenCalled();
+      expect(deleteToolCalls).not.toHaveBeenCalled();
     });
-
-    it('should return 400 when no parameters provided', async () => {
-      const response = await request(app).delete('/api/convos').send({
-        arg: {},
-      });
-
-      expect(response.status).toBe(400);
-      expect(response.body).toEqual({ error: 'no parameters provided' });
-      expect(deleteConvos).not.toHaveBeenCalled();
-      expect(deleteConvoSharedLinksWithCleanup).not.toHaveBeenCalled();
+    it.each([
+      {},
+      { arg: null },
+      { arg: {} },
+      { arg: { endpoint: 'SG AI Gateway' } },
+      { arg: { conversationId: ['a'] } },
+    ])('rejects invalid deletion parameters %j', async (body) => {
+      expect((await request(app).delete('/api/convos').send(body)).status).toBe(400);
+      expect(deleteSGConversations).not.toHaveBeenCalled();
     });
-
-    it('should return 400 when request body is empty (DoS prevention)', async () => {
-      const response = await request(app).delete('/api/convos').send({});
-
-      expect(response.status).toBe(400);
-      expect(response.body).toEqual({ error: 'no parameters provided' });
-      expect(deleteConvos).not.toHaveBeenCalled();
-    });
-
-    it('should return 400 when arg is null (DoS prevention)', async () => {
-      const response = await request(app).delete('/api/convos').send({ arg: null });
-
-      expect(response.status).toBe(400);
-      expect(response.body).toEqual({ error: 'no parameters provided' });
-      expect(deleteConvos).not.toHaveBeenCalled();
-    });
-
-    it('should return 400 when arg is undefined (DoS prevention)', async () => {
-      const response = await request(app).delete('/api/convos').send({ arg: undefined });
-
-      expect(response.status).toBe(400);
-      expect(response.body).toEqual({ error: 'no parameters provided' });
-      expect(deleteConvos).not.toHaveBeenCalled();
-    });
-
-    it('should return 400 when request body is null (DoS prevention)', async () => {
-      const response = await request(app)
-        .delete('/api/convos')
-        .set('Content-Type', 'application/json')
-        .send('null');
-
-      expect(response.status).toBe(400);
-      expect(deleteConvos).not.toHaveBeenCalled();
-    });
-
-    it('should return 500 if deleteConvoSharedLinksWithCleanup fails', async () => {
-      const mockConversationId = 'conv-error';
-
-      deleteConvos.mockResolvedValue({ deletedCount: 1 });
-      deleteToolCalls.mockResolvedValue({ deletedCount: 2 });
-      deleteConvoSharedLinksWithCleanup.mockRejectedValue(
-        new Error('Failed to delete shared links'),
-      );
-
-      const response = await request(app)
-        .delete('/api/convos')
-        .send({
-          arg: {
-            conversationId: mockConversationId,
-          },
-        });
-
-      expect(response.status).toBe(500);
-      expect(response.text).toBe('Error clearing conversations');
-    });
-
-    it('should execute deletions in correct sequence for single conversation', async () => {
-      const mockConversationId = 'conv-sequence';
-      const executionOrder = [];
-
-      deleteConvos.mockImplementation(() => {
-        executionOrder.push('deleteConvos');
-        return Promise.resolve({ deletedCount: 1 });
-      });
-
-      deleteToolCalls.mockImplementation(() => {
-        executionOrder.push('deleteToolCalls');
-        return Promise.resolve({ deletedCount: 2 });
-      });
-
-      deleteConvoSharedLinksWithCleanup.mockImplementation(() => {
-        executionOrder.push('deleteConvoSharedLinksWithCleanup');
-        return Promise.resolve({ deletedCount: 1 });
-      });
-
-      await request(app)
-        .delete('/api/convos')
-        .send({
-          arg: {
-            conversationId: mockConversationId,
-          },
-        });
-
-      expect(executionOrder).toEqual([
-        'deleteConvos',
-        'deleteToolCalls',
-        'deleteConvoSharedLinksWithCleanup',
-      ]);
-    });
-
-    it('should prevent orphaned shared links when deleting single conversation', async () => {
-      const mockConversationId = 'conv-with-shares';
-
-      deleteConvos.mockResolvedValue({ deletedCount: 1 });
-      deleteToolCalls.mockResolvedValue({ deletedCount: 4 });
-      deleteConvoSharedLinksWithCleanup.mockResolvedValue({
-        message: 'Shared links deleted successfully',
-        deletedCount: 2,
-      });
-
-      const response = await request(app)
-        .delete('/api/convos')
-        .send({
-          arg: {
-            conversationId: mockConversationId,
-          },
-        });
-
-      expect(response.status).toBe(201);
-
-      /** Verify shared links were deleted for the specific conversation */
-      expect(deleteConvoSharedLinksWithCleanup).toHaveBeenCalledWith(
-        'test-user-123',
-        mockConversationId,
-      );
-
-      /** Verify it was called after the conversation was deleted */
-      expect(deleteConvoSharedLinksWithCleanup).toHaveBeenCalledAfter(deleteConvos);
+    it('keeps the empty new-conversation button no-op', async () => {
+      expect(
+        (
+          await request(app)
+            .delete('/api/convos')
+            .send({ arg: { source: 'button' } })
+        ).status,
+      ).toBe(200);
+      expect(deleteSGConversations).not.toHaveBeenCalled();
     });
   });
-
   describe('GET / search handling', () => {
     const { getConvosByCursor } = require('~/models');
 

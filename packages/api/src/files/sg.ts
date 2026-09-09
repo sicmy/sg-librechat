@@ -1,14 +1,23 @@
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import FormData from 'form-data';
-import { FileContext, FileSources } from 'librechat-data-provider';
+import {
+  FileContext,
+  FileSources,
+  sgArtifactMetadataSchema,
+  sgFileDeletionReportSchema,
+} from 'librechat-data-provider';
+import type { SGFileDeletionReport } from 'librechat-data-provider';
 import type {
   SGFileMetadata,
+  SGArtifactMetadata,
   SGFileState,
   TEndpoint,
   TFile,
   TFileUpload,
+  TMessage,
 } from 'librechat-data-provider';
+import type { RetentionExpiry } from './retention';
 import type { AxiosRequestConfig } from 'axios';
 import { applySSRFSafeAgentIfDirect } from '~/auth/agent';
 import { applyAxiosProxyConfig } from '~/utils/proxy';
@@ -18,7 +27,7 @@ const axios = createAxiosInstance();
 const TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const REQUEST_TIMEOUT_MS = 120_000;
 
-type SGEndpointConfig = Pick<TEndpoint, 'name' | 'apiKey' | 'baseURL' | 'customParams'>;
+export type SGEndpointConfig = Pick<TEndpoint, 'name' | 'apiKey' | 'baseURL' | 'customParams'>;
 
 type GatewayUploadResponse = {
   file_id: string;
@@ -238,23 +247,60 @@ export async function getSGGatewayCitationPage({
   });
 }
 
+export async function getSGGatewayCitationFrame({
+  endpointConfig,
+  file,
+  frameNumber,
+  tenantId,
+  userId,
+  allowedAddresses,
+}: {
+  endpointConfig: SGEndpointConfig;
+  file: Pick<TFile, 'file_id' | 'type' | 'metadata'>;
+  frameNumber: number;
+  tenantId?: string | null;
+  userId: string;
+  allowedAddresses?: string[] | null;
+}): Promise<Buffer> {
+  if (!file.type?.startsWith('video/') || !Number.isSafeInteger(frameNumber) || frameNumber < 0) {
+    throw new SGFileGatewayError(404, 'resource_not_found');
+  }
+  const gateway = requireGatewayMetadata(file);
+  const url = getGatewayURL(
+    endpointConfig.baseURL,
+    `/internal/files/${encodeURIComponent(file.file_id)}/frames/${frameNumber}`,
+  );
+  return requestGateway<Buffer>({
+    method: 'GET',
+    url,
+    endpointConfig,
+    tenantId,
+    userId,
+    conversationId: gateway.conversationId,
+    allowedAddresses,
+    responseType: 'arraybuffer',
+  });
+}
+
 export async function downloadSGGatewayCitationFile({
   endpointConfig,
   file,
   tenantId,
   userId,
   allowedAddresses,
+  documentPreview = false,
 }: {
   endpointConfig: SGEndpointConfig;
   file: Pick<TFile, 'file_id' | 'metadata'>;
   tenantId?: string | null;
   userId: string;
   allowedAddresses?: string[] | null;
+  documentPreview?: boolean;
 }): Promise<Buffer> {
   const gateway = requireGatewayMetadata(file);
   const url = getGatewayURL(
     endpointConfig.baseURL,
-    `/internal/files/${encodeURIComponent(file.file_id)}/download`,
+    `/internal/files/${encodeURIComponent(file.file_id)}/${documentPreview ? 'document-preview' : 'download'}`,
   );
   return requestGateway<Buffer>({
     method: 'GET',
@@ -313,13 +359,27 @@ export async function getSGGatewayFileStatus({
   };
 }
 
-export async function retrySGGatewayFile({
+export function retrySGGatewayFile(
+  args: Omit<Parameters<typeof changeSGGatewayFileJob>[0], 'action'>,
+): ReturnType<typeof changeSGGatewayFileJob> {
+  return changeSGGatewayFileJob({ ...args, action: 'retry' });
+}
+
+export function cancelSGGatewayFile(
+  args: Omit<Parameters<typeof changeSGGatewayFileJob>[0], 'action'>,
+): ReturnType<typeof changeSGGatewayFileJob> {
+  return changeSGGatewayFileJob({ ...args, action: 'cancel' });
+}
+
+async function changeSGGatewayFileJob({
   endpointConfig,
   file,
   tenantId,
   userId,
   allowedAddresses,
+  action,
 }: {
+  action: 'retry' | 'cancel';
   endpointConfig: SGEndpointConfig;
   file: Pick<TFile, 'file_id' | 'metadata'>;
   tenantId?: string | null;
@@ -329,7 +389,7 @@ export async function retrySGGatewayFile({
   const gateway = requireGatewayMetadata(file);
   const url = getGatewayURL(
     endpointConfig.baseURL,
-    `/internal/jobs/${encodeURIComponent(gateway.jobId)}/retry`,
+    `/internal/jobs/${encodeURIComponent(gateway.jobId)}/${action}`,
   );
   const response = await requestGateway<GatewayJobResponse>({
     method: 'POST',
@@ -394,6 +454,51 @@ export async function deleteSGGatewayFile({
   }
 }
 
+export async function deleteSGGatewayFileTree(
+  args: Parameters<typeof deleteSGGatewayFile>[0],
+): Promise<SGFileDeletionReport> {
+  const gateway = requireGatewayMetadata(args.file);
+  return deleteSGGatewayScopedFileTree({
+    ...args,
+    fileId: args.file.file_id,
+    conversationId: gateway.conversationId,
+  });
+}
+
+export async function deleteSGGatewayScopedFileTree(args: {
+  fileId: string;
+  conversationId: string;
+  endpointConfig: SGEndpointConfig;
+  userId: string;
+  tenantId?: string | null;
+  allowedAddresses?: string[] | null;
+}): Promise<SGFileDeletionReport> {
+  requireScopeToken(args.fileId, 'file_id');
+  requireScopeToken(args.conversationId, 'conversation_id');
+  const url = new URL(
+    getGatewayURL(
+      args.endpointConfig.baseURL,
+      `/internal/files/${encodeURIComponent(args.fileId)}`,
+    ),
+  );
+  url.searchParams.set('report', 'true');
+  const response = await requestGateway<SGFileDeletionReport>({
+    ...args,
+    method: 'DELETE',
+    url: url.toString(),
+    conversationId: args.conversationId,
+  });
+  const parsed = sgFileDeletionReportSchema.safeParse(response);
+  if (
+    !parsed.success ||
+    parsed.data.file_id !== args.fileId ||
+    parsed.data.conversation_id !== args.conversationId
+  ) {
+    throw new SGFileGatewayError(502, 'sg_file_deletion_report_invalid');
+  }
+  return parsed.data;
+}
+
 export async function deleteSGGatewayConversation({
   endpointConfig,
   conversationId,
@@ -429,6 +534,7 @@ export function buildSGInternalContext({
   userId,
   messageId,
   endpoint,
+  conversationId,
 }: {
   requestFiles: Array<{ file_id?: string }>;
   authorizedFiles: Array<Pick<TFile, 'file_id' | 'source' | 'metadata'>>;
@@ -436,6 +542,7 @@ export function buildSGInternalContext({
   userId: string;
   messageId: string;
   endpoint: string;
+  conversationId: string;
 }): SGInternalContext | undefined {
   const fileIds = requestFiles.flatMap((file) => (file.file_id ? [file.file_id] : []));
   if (fileIds.length === 0) {
@@ -461,13 +568,298 @@ export function buildSGInternalContext({
   if (scopes.size !== 1) {
     throw new SGFileGatewayError(409, 'sg_file_scope_conflict');
   }
+  if (!scopes.has(requireScopeToken(conversationId, 'conversation_id'))) {
+    throw new SGFileGatewayError(404, 'sg_file_reference_not_found');
+  }
   return {
     tenant_id: toSGScopeToken(tenantId, 'tenant'),
     user_id: toSGScopeToken(userId, 'user'),
-    conversation_id: [...scopes][0],
+    conversation_id: conversationId,
     message_id: toSGScopeToken(messageId, 'message'),
     file_ids: uniqueFileIds,
   };
+}
+
+type ScopedSGFile = Pick<TFile, 'file_id' | 'source' | 'metadata' | 'conversationId'>;
+
+export async function bindSGDraftFiles({
+  files,
+  fileIds,
+  conversationId,
+  endpointConfig,
+  tenantId,
+  userId,
+  allowedAddresses,
+  hasForeignReferences,
+  updateFile,
+}: {
+  files: ScopedSGFile[];
+  fileIds: string[];
+  conversationId: string;
+  endpointConfig: SGEndpointConfig;
+  tenantId?: string | null;
+  userId: string;
+  allowedAddresses?: string[] | null;
+  hasForeignReferences: (fileIds: string[]) => Promise<boolean>;
+  updateFile: (
+    file: Partial<TFile> & { file_id: string },
+    filter: { user: string },
+  ) => Promise<object | null>;
+}): Promise<ScopedSGFile[]> {
+  requireScopeToken(conversationId, 'conversation_id');
+  const byId = new Map(files.map((file) => [file.file_id, file]));
+  const selected = fileIds.map((id) => {
+    const file = byId.get(id);
+    if (
+      !file ||
+      file.source !== FileSources.sg_gateway ||
+      file.metadata?.sgGateway?.endpoint !== endpointConfig.name
+    ) {
+      throw new SGFileGatewayError(404, 'sg_file_reference_not_found');
+    }
+    return file;
+  });
+  const drafts = new Map<string, ScopedSGFile[]>();
+  for (const file of selected) {
+    const scope = requireGatewayMetadata(file).conversationId;
+    if (scope === conversationId) {
+      continue;
+    }
+    if (
+      !scope.startsWith('draft-') ||
+      (file.conversationId &&
+        !file.conversationId.startsWith('draft-') &&
+        file.conversationId !== conversationId)
+    ) {
+      throw new SGFileGatewayError(404, 'sg_file_reference_not_found');
+    }
+    drafts.set(scope, [...(drafts.get(scope) ?? []), file]);
+  }
+  const draftIds = Array.from(drafts.values()).flatMap((group) =>
+    group.map((file) => file.file_id),
+  );
+  if (draftIds.length && (await hasForeignReferences(draftIds))) {
+    throw new SGFileGatewayError(404, 'sg_file_reference_not_found');
+  }
+  for (const [draft, group] of drafts) {
+    await requestGateway({
+      method: 'POST',
+      url: getGatewayURL(
+        endpointConfig.baseURL,
+        `/internal/conversations/${encodeURIComponent(draft)}/bind`,
+      ),
+      endpointConfig,
+      tenantId,
+      userId,
+      conversationId: draft,
+      allowedAddresses,
+      data: { conversation_id: conversationId, file_ids: group.map((file) => file.file_id) },
+    });
+    for (const file of group) {
+      const metadata = {
+        ...file.metadata,
+        sgGateway: { ...requireGatewayMetadata(file), conversationId },
+      };
+      if (
+        !(await updateFile({ file_id: file.file_id, conversationId, metadata }, { user: userId }))
+      ) {
+        throw new SGFileGatewayError(409, 'sg_file_binding_interrupted');
+      }
+      byId.set(file.file_id, { ...file, conversationId, metadata });
+    }
+  }
+  return fileIds.map((id) => byId.get(id)!);
+}
+
+export function extractSGArtifactMetadata(
+  output:
+    | {
+        sg_artifacts?: object;
+        additional_kwargs?: { __raw_response?: { sg_artifacts?: object } };
+        response_metadata?: { sg_artifacts?: object };
+      }
+    | undefined,
+): SGArtifactMetadata | null {
+  for (const candidate of [
+    output?.sg_artifacts,
+    output?.additional_kwargs?.__raw_response?.sg_artifacts,
+    output?.response_metadata?.sg_artifacts,
+  ]) {
+    const parsed = sgArtifactMetadataSchema.safeParse(candidate);
+    if (parsed.success) {
+      return parsed.data;
+    }
+  }
+  return null;
+}
+
+export function selectSGEditFiles(
+  text: string | undefined,
+  requested: string[],
+  messages: Pick<TMessage, 'messageId' | 'parentMessageId' | 'metadata'>[],
+  parentId: string | undefined,
+): string[] | undefined {
+  if (!text || !/^(이미지 편집|그림 편집|Edit an image|Edit image)\s*:/i.test(text.trim())) {
+    return undefined;
+  }
+  if (requested.length) {
+    return requested;
+  }
+  const byId = new Map(messages.map((message) => [message.messageId, message]));
+  const visited = new Set<string>();
+  let currentId = parentId;
+  while (currentId && !visited.has(currentId)) {
+    visited.add(currentId);
+    const message = byId.get(currentId);
+    if (!message) {
+      break;
+    }
+    const parsed = sgArtifactMetadataSchema.safeParse(message.metadata?.sgArtifacts);
+    if (parsed.success) {
+      const images = parsed.data.artifacts.filter((artifact) => artifact.mime_type === 'image/png');
+      if (images.length) {
+        return images.map((artifact) => artifact.file_id);
+      }
+    }
+    currentId = message.parentMessageId ?? undefined;
+  }
+  return undefined;
+}
+
+export async function getSGGenerationDelivery({
+  endpointConfig,
+  conversationId,
+  messageId,
+  tenantId,
+  userId,
+  allowedAddresses,
+}: {
+  endpointConfig: SGEndpointConfig;
+  conversationId: string;
+  messageId: string;
+  tenantId?: string | null;
+  userId: string;
+  allowedAddresses?: string[] | null;
+}): Promise<SGArtifactMetadata | null> {
+  const scope = toSGScopeToken(conversationId, 'conversation');
+  const requestId = toSGScopeToken(messageId, 'message');
+  let response: {
+    schema_version: number;
+    state: 'PENDING' | 'READY';
+    message_id: string;
+    artifacts: SGArtifactMetadata['artifacts'];
+  };
+  try {
+    response = await requestGateway({
+      method: 'GET',
+      url: getGatewayURL(
+        endpointConfig.baseURL,
+        `/internal/conversations/${encodeURIComponent(scope)}/generations/${encodeURIComponent(requestId)}`,
+      ),
+      endpointConfig,
+      tenantId,
+      userId,
+      conversationId: scope,
+      allowedAddresses,
+      allowPending: true,
+    });
+  } catch (error) {
+    if (error instanceof SGFileGatewayError && error.statusCode === 404) {
+      return null;
+    }
+    throw error;
+  }
+  if (!response || response.message_id !== requestId || response.schema_version !== 1) {
+    throw new SGFileGatewayError(502, 'sg_generation_delivery_invalid');
+  }
+  if (
+    response.state === 'PENDING' &&
+    Array.isArray(response.artifacts) &&
+    response.artifacts.length === 0
+  ) {
+    return null;
+  }
+  const parsed = sgArtifactMetadataSchema.safeParse({
+    schema_version: response.schema_version,
+    artifacts: response.artifacts,
+  });
+  if (
+    response.state !== 'READY' ||
+    !parsed.success ||
+    parsed.data.artifacts.some((artifact) => artifact.conversation_id !== scope)
+  ) {
+    throw new SGFileGatewayError(502, 'sg_generation_delivery_invalid');
+  }
+  return parsed.data;
+}
+
+export async function registerSGArtifacts({
+  metadata,
+  endpointConfig,
+  scope,
+  createFile,
+  allowedAddresses,
+  retention,
+}: {
+  metadata: SGArtifactMetadata;
+  endpointConfig: SGEndpointConfig;
+  scope: {
+    tenantId?: string | null;
+    userId: string;
+    conversationId: string;
+    gatewayConversationId: string;
+    requestMessageId?: string;
+  };
+  createFile: (file: TFileUpload, disableTTL: boolean) => Promise<object | null>;
+  allowedAddresses?: string[] | null;
+  retention?: RetentionExpiry;
+}): Promise<void> {
+  for (const artifact of metadata.artifacts) {
+    if (artifact.conversation_id !== scope.gatewayConversationId) {
+      throw new SGFileGatewayError(404, 'resource_not_found');
+    }
+    const file: TFileUpload = {
+      user: scope.userId,
+      ...(scope.tenantId ? { tenantId: scope.tenantId } : {}),
+      conversationId: scope.conversationId,
+      file_id: artifact.file_id,
+      temp_file_id: artifact.file_id,
+      bytes: artifact.size_bytes,
+      filename: artifact.display_name,
+      filepath: getSGGatewayFilePath(artifact.file_id, artifact.mime_type),
+      type: artifact.mime_type,
+      embedded: false,
+      object: 'file',
+      usage: 0,
+      source: FileSources.sg_gateway,
+      context: FileContext.message_attachment,
+      status: 'ready',
+      ...(retention?.expiredAt !== undefined ? { expiredAt: retention.expiredAt } : {}),
+      metadata: {
+        sgGateway: {
+          endpoint: endpointConfig.name,
+          jobId: artifact.job_id,
+          ...(artifact.source_file_id ? { sourceFileId: artifact.source_file_id } : {}),
+          ...(scope.requestMessageId ? { requestMessageId: scope.requestMessageId } : {}),
+          conversationId: artifact.conversation_id,
+          state: 'READY',
+        },
+      },
+    };
+    const status = await getSGGatewayFileStatus({
+      endpointConfig,
+      file,
+      tenantId: scope.tenantId,
+      userId: scope.userId,
+      allowedAddresses,
+    });
+    if (status.file_id !== artifact.file_id || status.status !== 'ready') {
+      throw new SGFileGatewayError(409, 'sg_artifact_not_ready');
+    }
+    if (!(await createFile(file, true))) {
+      throw new SGFileGatewayError(500, 'sg_artifact_persistence_failed');
+    }
+  }
 }
 
 function getGatewayURL(baseURL: string, path: string): string {
@@ -547,6 +939,8 @@ async function requestGateway<T>({
   conversationId,
   allowedAddresses,
   responseType,
+  data,
+  allowPending = false,
 }: {
   method: 'GET' | 'POST' | 'DELETE';
   url: string;
@@ -556,6 +950,8 @@ async function requestGateway<T>({
   conversationId: string;
   allowedAddresses?: string[] | null;
   responseType?: AxiosRequestConfig['responseType'];
+  data?: { conversation_id: string; file_ids: string[] };
+  allowPending?: boolean;
 }): Promise<T> {
   const config: AxiosRequestConfig = {
     method,
@@ -568,13 +964,18 @@ async function requestGateway<T>({
     },
     timeout: REQUEST_TIMEOUT_MS,
     ...(responseType ? { responseType } : {}),
+    ...(data ? { data } : {}),
     validateStatus: () => true,
   };
   applyAxiosProxyConfig(config, url);
   applySSRFSafeAgentIfDirect(config, url, allowedAddresses);
   try {
     const response = await axios.request<T>(config);
-    if (response.status !== 200 && response.status !== 204) {
+    if (
+      response.status !== 200 &&
+      response.status !== 204 &&
+      !(allowPending && response.status === 202)
+    ) {
       throw gatewayResponseError(response.status, response.data);
     }
     return response.data;

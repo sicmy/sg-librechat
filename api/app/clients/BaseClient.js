@@ -735,7 +735,31 @@ class BaseClient {
       );
     }
 
-    const { completion, metadata } = await this.sendCompletion(payload, opts);
+    if (this.sgArtifactSink?.begin) {
+      await userMessagePromise;
+      if (this.abortController?.signal?.aborted) {
+        throw new Error('sg_generation_aborted');
+      }
+      await this.sgArtifactSink.begin({
+        responseMessageId,
+        userMessageId: userMessage.messageId,
+        endpoint: this.options.endpoint,
+        sender: this.sender ?? 'SG AI Gateway',
+      });
+      if (this.abortController?.signal?.aborted) {
+        await this.sgArtifactSink.cancel?.();
+        throw new Error('sg_generation_aborted');
+      }
+    }
+    let completion;
+    let metadata;
+    try {
+      ({ completion, metadata } = await this.sendCompletion(payload, opts));
+    } finally {
+      if (this.abortController?.signal?.aborted) {
+        await this.sgArtifactSink?.cancel?.();
+      }
+    }
     if (this.abortController) {
       this.abortController.requestCompleted = true;
     }

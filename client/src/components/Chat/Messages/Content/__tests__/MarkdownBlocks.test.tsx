@@ -116,6 +116,24 @@ const NewMarkdown = ({ content }: { content: string }) => (
 );
 
 describe('MarkdownBlocks code-block index parity', () => {
+  it('formats JSON paths in existing and streamed answer bodies', () => {
+    const { container, rerender } = render(
+      <RecoilRoot>
+        <Markdown content={'경로: $["warehouse"]'} isLatestMessage={false} />
+      </RecoilRoot>,
+    );
+    expect(container.textContent).toBe('경로: $.warehouse');
+    rerender(
+      <RecoilRoot>
+        <Markdown
+          content={'경로: $["warehouse"]\n\n수량: $["items"][1]["quantity"]'}
+          isLatestMessage={false}
+        />
+      </RecoilRoot>,
+    );
+    expect(container.textContent).toContain('수량: $.items[1].quantity');
+  });
+
   it('assigns document-order indices on a direct render (matches whole-message renderer)', () => {
     const { container: oldC } = render(
       <RecoilRoot>

@@ -16,10 +16,13 @@ const {
   getSGGatewayFilePath,
   getSGGatewayImage,
   getSGGatewayCitationPage,
+  getSGGatewayCitationFrame,
   downloadSGGatewayCitationFile,
   getSGGatewayFileStatus,
   retrySGGatewayFile,
+  cancelSGGatewayFile,
   deleteSGGatewayFile,
+  deleteSGFileResources,
 } = require('@librechat/api');
 const {
   Time,
@@ -230,7 +233,9 @@ router.delete('/', async (req, res) => {
     }
 
     const fileIds = files.map((file) => file.file_id);
-    const dbFiles = await db.getFiles({ file_id: { $in: fileIds } });
+    const dbFiles = await db.getFiles({ file_id: { $in: fileIds } }, undefined, undefined, {
+      includeDeleted: true,
+    });
 
     if (req.body.agent_id && req.body.tool_resource) {
       if (!isAgentToolResourceKey(req.body.tool_resource)) {
@@ -291,6 +296,7 @@ router.delete('/', async (req, res) => {
 
     if (dbFiles.length > 0 && nonOwnedFiles.length === 0) {
       const localFiles = [];
+      const deletedSGFiles = new Set();
       for (const file of ownedFiles) {
         if (file.source !== FileSources.sg_gateway) {
           localFiles.push(file);
@@ -301,20 +307,24 @@ router.delete('/', async (req, res) => {
         if (!endpointConfig) {
           return res.status(409).json({ message: 'SG Gateway file metadata is unavailable' });
         }
-        await deleteSGGatewayFile({
+        if (deletedSGFiles.has(file.file_id)) continue;
+        const removed = await deleteSGFileResources({
           endpointConfig,
           file,
           tenantId: req.user.tenantId,
           userId: req.user.id,
           allowedAddresses: req.config?.endpoints?.allowedAddresses,
+          methods: db,
         });
-        await db.deleteFile(file.file_id);
+        for (const id of removed) deletedSGFiles.add(id);
       }
       if (localFiles.length > 0) {
         await processDeleteRequest({ req, files: localFiles });
       }
       logger.debug('[/files] Files deleted successfully', { count: ownedFiles.length });
-      res.status(200).json({ message: 'Files deleted successfully' });
+      res
+        .status(200)
+        .json({ message: 'Files deleted successfully', deleted_file_ids: [...deletedSGFiles] });
       return;
     }
 
@@ -478,6 +488,7 @@ router.get('/:file_id/preview', fileAccess, async (req, res) => {
         file_id,
         status: status.status,
         previewError: status.previewError,
+        sgGateway: status.metadata?.sgGateway,
       });
     }
     /* Lazy sweep: if stuck `pending` past the cutoff, mark `failed`
@@ -520,7 +531,7 @@ router.get('/:file_id/preview', fileAccess, async (req, res) => {
   }
 });
 
-router.post('/:file_id/retry', fileAccess, async (req, res) => {
+router.post(['/:file_id/retry', '/:file_id/cancel'], fileAccess, async (req, res) => {
   try {
     const file = req.fileAccess.file;
     if (file.source !== FileSources.sg_gateway) {
@@ -531,7 +542,8 @@ router.post('/:file_id/retry', fileAccess, async (req, res) => {
     if (!endpointConfig) {
       return res.status(409).json({ message: 'SG Gateway file metadata is unavailable' });
     }
-    const status = await retrySGGatewayFile({
+    const action = req.path.endsWith('/cancel') ? cancelSGGatewayFile : retrySGGatewayFile;
+    const status = await action({
       endpointConfig,
       file,
       tenantId: req.user.tenantId,
@@ -543,12 +555,13 @@ router.post('/:file_id/retry', fileAccess, async (req, res) => {
       file_id: req.params.file_id,
       status: status.status,
       previewError: status.previewError,
+      sgGateway: status.metadata?.sgGateway,
     });
   } catch (error) {
-    logger.error('[/files/:file_id/retry] SG Gateway retry failed:', error);
+    logger.error('[/files/:file_id/job] SG Gateway action failed', { code: error.code });
     return res.status(error.statusCode ?? 500).json({
-      message: 'Failed to retry file processing',
-      code: error.code ?? 'sg_file_retry_failed',
+      message: 'Failed to update file processing',
+      code: error.code ?? 'sg_file_action_failed',
     });
   }
 });
@@ -680,7 +693,42 @@ router.get('/sg-citation/:file_id/pages/:page_number', fileAccess, async (req, r
   }
 });
 
-router.get('/sg-citation/:file_id/download', fileAccess, async (req, res) => {
+router.get('/sg-citation/:file_id/frames/:frame_number', fileAccess, async (req, res) => {
+  try {
+    const file = req.fileAccess.file;
+    const frameNumber = Number(req.params.frame_number);
+    if (
+      file.source !== FileSources.sg_gateway ||
+      !file.type?.startsWith('video/') ||
+      !Number.isSafeInteger(frameNumber) ||
+      frameNumber < 0
+    ) {
+      return res.status(404).json({ message: 'Citation frame not found' });
+    }
+    const endpoint = file.metadata?.sgGateway?.endpoint;
+    const endpointConfig = endpoint ? getSGFileEndpoint(req, endpoint) : null;
+    if (!endpointConfig) {
+      return res.status(409).json({ message: 'SG Gateway file metadata is unavailable' });
+    }
+    const content = await getSGGatewayCitationFrame({
+      endpointConfig,
+      file,
+      frameNumber,
+      tenantId: req.user.tenantId,
+      userId: req.user.id,
+      allowedAddresses: req.config?.endpoints?.allowedAddresses,
+    });
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    return res.status(200).send(content);
+  } catch (error) {
+    const status = Number.isInteger(error?.statusCode) ? error.statusCode : 502;
+    return res.status(status).json({ message: 'Citation frame is unavailable' });
+  }
+});
+
+async function downloadSGFile(req, res) {
   try {
     const file = req.fileAccess.file;
     if (file.source !== FileSources.sg_gateway) {
@@ -697,18 +745,31 @@ router.get('/sg-citation/:file_id/download', fileAccess, async (req, res) => {
       tenantId: req.user.tenantId,
       userId: req.user.id,
       allowedAddresses: req.config?.endpoints?.allowedAddresses,
+      documentPreview: req.path.endsWith('/document-preview'),
     });
     res.setHeader('Cache-Control', 'private, no-store');
     res.setHeader('Content-Disposition', getContentDisposition(file.filename));
-    res.setHeader('Content-Type', file.type || 'application/octet-stream');
+    res.setHeader(
+      'Content-Type',
+      req.path.endsWith('/document-preview')
+        ? 'application/pdf'
+        : file.type || 'application/octet-stream',
+    );
     res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader(
+      'X-File-Metadata',
+      encodeURIComponent(JSON.stringify(getDownloadFileMetadata(file))),
+    );
     return res.status(200).send(content);
   } catch (error) {
     logger.error('[SG CITATION DOWNLOAD ROUTE] Failed to download Gateway file:', error);
     const status = Number.isInteger(error?.statusCode) ? error.statusCode : 502;
     return res.status(status).json({ message: 'Citation file is unavailable' });
   }
-});
+}
+
+router.get('/sg-citation/:file_id/download', fileAccess, downloadSGFile);
+router.get('/sg-citation/:file_id/document-preview', fileAccess, downloadSGFile);
 
 router.get('/download-url/:userId/:file_id', fileAccess, async (req, res) => {
   try {
@@ -755,6 +816,10 @@ router.get('/download/:userId/:file_id', fileAccess, async (req, res) => {
 
     // Access already validated by fileAccess middleware
     const file = req.fileAccess.file;
+
+    if (file.source === FileSources.sg_gateway) {
+      return downloadSGFile(req, res);
+    }
 
     if (checkOpenAIStorage(file.source) && !file.model) {
       logger.warn(`File download requested by user ${userId} has no associated model: ${file_id}`);

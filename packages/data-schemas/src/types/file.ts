@@ -74,6 +74,7 @@ export interface IMongoFile extends Omit<Document, 'model'> {
     sgGateway?: SGFileMetadata;
   };
   expiresAt?: Date;
+  sgUploadExpiresAt?: Date;
   expiredAt?: Date | null;
   createdAt?: Date;
   updatedAt?: Date;

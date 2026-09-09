@@ -5,6 +5,8 @@ export * from './crypto';
 export * from './schema';
 export * from './utils';
 export { createModels } from './models';
+export type { ResourceDeletionRecord, ResourceDeletionTarget } from './models/resourceDeletion';
+export type { ResourceDeletionMethods } from './methods/resourceDeletion';
 export {
   createMethods,
   RoleConflictError,
@@ -66,6 +68,9 @@ export {
   SYSTEM_TENANT_ID,
 } from './config/tenantContext';
 export type { TenantContext } from './config/tenantContext';
+export { prepareLifecycleIndexes } from './utils/lifecycleIndexes';
+export type { SchemaWithMeiliMethods } from './models/plugins/mongoMeili';
+export { SG_UPLOAD_TTL_GRACE_MS, isSGFileExpired } from './utils/uploadExpiry';
 export {
   MCPServerNameMigrationError,
   createMCPAuthorityLookupIndexes,

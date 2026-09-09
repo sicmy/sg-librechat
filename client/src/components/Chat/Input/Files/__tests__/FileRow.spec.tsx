@@ -13,6 +13,7 @@ jest.mock('~/data-provider', () => ({
   useDeleteFilesMutation: jest.fn(),
   useFilePreview: jest.fn(() => ({ data: undefined })),
   useRetrySGFileMutation: jest.fn(),
+  useCancelSGFileMutation: jest.fn(),
 }));
 
 jest.mock('~/hooks/Files', () => ({
@@ -62,6 +63,7 @@ const mockUseLocalize = jest.requireMock('~/hooks').useLocalize;
 const mockUseDeleteFilesMutation = jest.requireMock('~/data-provider').useDeleteFilesMutation;
 const mockUseFilePreview = jest.requireMock('~/data-provider').useFilePreview;
 const mockUseRetrySGFileMutation = jest.requireMock('~/data-provider').useRetrySGFileMutation;
+const mockUseCancelSGFileMutation = jest.requireMock('~/data-provider').useCancelSGFileMutation;
 const mockUseFileDeletion = jest.requireMock('~/hooks/Files').useFileDeletion;
 
 describe('FileRow', () => {
@@ -86,6 +88,7 @@ describe('FileRow', () => {
       mutateAsync: jest.fn(),
     });
     mockUseFilePreview.mockReturnValue({ data: undefined });
+    mockUseCancelSGFileMutation.mockReturnValue({ isLoading: false, mutate: jest.fn() });
     mockUseRetrySGFileMutation.mockReturnValue({
       isLoading: false,
       mutate: jest.fn(),
@@ -218,6 +221,58 @@ describe('FileRow', () => {
   });
 
   describe('File Source', () => {
+    it('offers cancellation for a pending SG file', () => {
+      const mutate = jest.fn();
+      mockUseCancelSGFileMutation.mockReturnValue({ isLoading: false, mutate });
+      const file = createMockFile({
+        source: FileSources.sg_gateway,
+        status: 'pending',
+        progress: 0.9,
+      });
+      renderFileRow(new Map([[file.file_id, file]]));
+      fireEvent.click(screen.getByRole('button', { name: 'com_ui_sg_file_cancel' }));
+      expect(mutate).toHaveBeenCalledWith(file.file_id, expect.any(Object));
+    });
+
+    it('does not offer retry for a permanent SG failure', () => {
+      const mutate = jest.fn();
+      mockUseRetrySGFileMutation.mockReturnValue({ isLoading: false, mutate });
+      const file = createMockFile({
+        source: FileSources.sg_gateway,
+        status: 'failed',
+        metadata: {
+          sgGateway: {
+            endpoint: 'SG AI Gateway',
+            jobId: 'job-test',
+            conversationId: 'conversation-test',
+            state: 'FAILED',
+            retryable: false,
+          },
+        },
+      });
+      renderFileRow(new Map([[file.file_id, file]]));
+      expect(screen.getByText('com_ui_sg_file_unprocessable')).toBeInTheDocument();
+      expect(
+        screen.queryByRole('button', { name: 'com_ui_sg_file_retry' }),
+      ).not.toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('mock-file-container'));
+      expect(mutate).not.toHaveBeenCalled();
+    });
+
+    it('offers an explicit status refresh when preview polling is disconnected', () => {
+      const refetch = jest.fn();
+      mockUseFilePreview.mockReturnValue({ isError: true, isFetching: false, refetch });
+      const file = createMockFile({
+        source: FileSources.sg_gateway,
+        status: 'pending',
+        progress: 0.9,
+      });
+      renderFileRow(new Map([[file.file_id, file]]));
+      expect(screen.getByText('com_ui_sg_file_status_unavailable')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'com_ui_sg_file_check_status' }));
+      expect(refetch).toHaveBeenCalledTimes(1);
+    });
+
     it('renders one status-aware file chip for an SG Gateway image', () => {
       const file = createMockFile({
         source: FileSources.sg_gateway,
@@ -240,6 +295,15 @@ describe('FileRow', () => {
         source: FileSources.sg_gateway,
         status: 'failed',
         progress: 1,
+        metadata: {
+          sgGateway: {
+            endpoint: 'SG AI Gateway',
+            jobId: 'job-test',
+            conversationId: 'conversation-test',
+            state: 'FAILED',
+            retryable: true,
+          },
+        },
       });
 
       renderFileRow(new Map([[file.file_id, file]]));

@@ -1575,6 +1575,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           interfaceConfig: req?.config?.interfaceConfig,
         };
 
+        let persistedRequestMessage = userMessage;
         if (!client.skipSaveUserMessage) {
           if (!userMessage) {
             throw new Error('User message was unavailable before terminal persistence');
@@ -1585,6 +1586,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           if (!savedUserMessage) {
             throw new Error('User message could not be persisted before terminal publication');
           }
+          persistedRequestMessage = savedUserMessage;
         }
         // Only consume the parked recovery source after the explicit user-row
         // write above succeeds. `response.databasePromise` alone is insufficient:
@@ -1640,14 +1642,20 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
 
         let terminalPublicationStarted = false;
         try {
+          const sgSnapshot = client.sgArtifactSink?.terminalSnapshot
+            ? await client.sgArtifactSink.terminalSnapshot(
+                persistedRequestMessage?.messageId,
+                savedResponseMessage.messageId,
+              )
+            : null;
           const pendingSteers = terminalClaim.drainedSteers.map(toPendingSteer);
           const finalEvent = {
             final: true,
-            conversation,
-            title: conversation.title,
-            requestMessage: sanitizeMessageForTransmit(userMessage),
+            conversation: sgSnapshot?.conversation ?? conversation,
+            title: (sgSnapshot?.conversation ?? conversation).title,
+            requestMessage: sanitizeMessageForTransmit(sgSnapshot?.request ?? userMessage),
             responseMessage: {
-              ...response,
+              ...(sgSnapshot?.response ?? response),
               ...((terminalWasAborted || preemptIncomplete) && { unfinished: true }),
             },
             ...(pendingSteers.length > 0 && { pendingSteers }),

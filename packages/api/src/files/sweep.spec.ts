@@ -14,6 +14,40 @@ describe('expired file sweep helpers', () => {
     delete process.env.FILE_RETENTION_SWEEP_INTERVAL_MS;
   });
 
+  it('routes SG expiry through its journal handler and skips only same-owner cascade duplicates', async () => {
+    const getExpiredFiles = jest.fn().mockResolvedValue([
+      { file_id: 'file_root', source: FileSources.sg_gateway, user: 'owner-a' },
+      { file_id: 'file_child', source: FileSources.sg_gateway, user: 'owner-a' },
+      { file_id: 'file_child', source: FileSources.sg_gateway, user: 'owner-b' },
+    ]);
+    const deleteExpiredSGFile = jest
+      .fn()
+      .mockResolvedValueOnce({ retained: false, fileIds: ['file_root', 'file_child'] })
+      .mockResolvedValueOnce({ retained: true, fileIds: [] });
+    const processDeleteRequest = jest.fn();
+    expect(
+      await sweepExpiredFiles(
+        {},
+        { getExpiredFiles, deleteExpiredSGFile, processDeleteRequest, logger },
+      ),
+    ).toEqual({ scanned: 3, deleted: 2, failed: 0, retained: 1 });
+    expect(deleteExpiredSGFile).toHaveBeenCalledTimes(2);
+    expect(processDeleteRequest).not.toHaveBeenCalled();
+  });
+
+  it('never falls back to a generic strategy when the SG expiry handler is missing', async () => {
+    const getExpiredFiles = jest
+      .fn()
+      .mockResolvedValue([{ file_id: 'file_root', source: FileSources.sg_gateway, user: 'owner' }]);
+    const processDeleteRequest = jest.fn();
+    expect(await sweepExpiredFiles({}, { getExpiredFiles, processDeleteRequest, logger })).toEqual({
+      scanned: 1,
+      deleted: 0,
+      failed: 1,
+    });
+    expect(processDeleteRequest).not.toHaveBeenCalled();
+  });
+
   afterEach(() => {
     jest.useRealTimers();
     delete process.env.FILE_RETENTION_SWEEP_INTERVAL_MS;

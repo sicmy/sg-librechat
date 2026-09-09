@@ -183,6 +183,7 @@ const messageSchema: Schema<IMessage> = new Schema(
     expiredAt: {
       type: Date,
     },
+    expiryReferencesOnly: { type: Boolean },
     addedConvo: {
       type: Boolean,
       default: undefined,
@@ -195,7 +196,24 @@ const messageSchema: Schema<IMessage> = new Schema(
   { timestamps: true },
 );
 
-messageSchema.index({ expiredAt: 1 }, { expireAfterSeconds: 0 });
+messageSchema.index({ expiredAt: 1 });
+messageSchema.pre(['updateOne', 'updateMany', 'findOneAndUpdate'], function () {
+  const update = this.getUpdate();
+  if (!update) return;
+  if (Array.isArray(update)) {
+    this.setUpdate([...update, { $unset: 'expiryReferencesOnly' }]);
+    return;
+  }
+  delete update.expiryReferencesOnly;
+  if (update.$set) delete update.$set.expiryReferencesOnly;
+  if (update.$setOnInsert) delete update.$setOnInsert.expiryReferencesOnly;
+  update.$unset = { ...update.$unset, expiryReferencesOnly: 1 };
+  this.setUpdate(update);
+});
+messageSchema.pre('save', function () {
+  this.expiryReferencesOnly = undefined;
+});
+messageSchema.index({ expiryReferencesOnly: 1, expiredAt: 1 });
 messageSchema.index({ createdAt: 1 });
 messageSchema.index({ messageId: 1, user: 1, tenantId: 1 }, { unique: true });
 

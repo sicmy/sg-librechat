@@ -14,11 +14,27 @@ import {
 } from './chatProject';
 import { createTempChatExpirationDate } from '~/utils/tempChatRetention';
 import { tenantSafeBulkWrite } from '~/utils/tenantBulkWrite';
+import {
+  assertResourceWritable,
+  ResourceDeletedError,
+  conversationBatchScopes,
+  assertConversationBatchWritable,
+  resourceBatchTenantFilter,
+} from '~/utils/resourceWrite';
+import { excludeDeletedConversations } from '~/utils/resourceRead';
 import { isValidObjectIdString } from '~/utils/objectId';
 import { decrementTagCounts } from './conversationTag';
 import logger from '~/config/winston';
+import { getTenantId, SYSTEM_TENANT_ID } from '~/config/tenantContext';
+import { prepareRetentionIndex } from '~/utils/retentionIndex';
 
 export interface ConversationMethods {
+  prepareConversationExpiryIndex(): Promise<void>;
+  getExpiredConversations(
+    limit?: number,
+    now?: Date,
+  ): Promise<Array<Pick<IConversation, 'user' | 'conversationId' | 'tenantId' | 'expiredAt'>>>;
+  getConversationsForDeletion(user: string, conversationId?: string): Promise<string[]>;
   getConvoFiles(conversationId: string): Promise<string[]>;
   searchConversation(conversationId: string): Promise<IConversation | null>;
   deleteNullOrEmptyConversations(): Promise<{
@@ -75,6 +91,37 @@ export function createConversationMethods(
   mongoose: typeof import('mongoose'),
   messageMethods?: Pick<MessageMethods, 'getMessages' | 'deleteMessages'>,
 ): ConversationMethods {
+  async function prepareConversationExpiryIndex(): Promise<void> {
+    await prepareRetentionIndex(mongoose, 'Conversation');
+  }
+
+  async function getExpiredConversations(limit = 50, now = new Date()) {
+    if (getTenantId() !== SYSTEM_TENANT_ID) throw new Error('system_scope_required');
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000 || !Number.isFinite(now.getTime()))
+      throw new Error('invalid_conversation_expiry_scan');
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    return Conversation.find({ expiredAt: { $ne: null, $lte: now } })
+      .select('user conversationId tenantId expiredAt')
+      .sort({ expiredAt: 1, _id: 1 })
+      .limit(limit)
+      .lean<Array<Pick<IConversation, 'user' | 'conversationId' | 'tenantId' | 'expiredAt'>>>();
+  }
+  async function getConversationsForDeletion(
+    user: string,
+    conversationId?: string,
+  ): Promise<string[]> {
+    if (
+      !user ||
+      (conversationId !== undefined && (typeof conversationId !== 'string' || !conversationId))
+    ) {
+      throw new Error('invalid_conversation_deletion_scope');
+    }
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const rows = await Conversation.find({ user, ...(conversationId ? { conversationId } : {}) })
+      .select('conversationId')
+      .lean<Array<{ conversationId: string }>>();
+    return rows.map((row) => row.conversationId);
+  }
   function getMessageMethods() {
     if (!messageMethods) {
       throw new Error('Message methods not injected into conversation methods');
@@ -108,7 +155,13 @@ export function createConversationMethods(
   async function getConvo(user: string, conversationId: string) {
     try {
       const Conversation = mongoose.models.Conversation as Model<IConversation>;
-      return await Conversation.findOne({ user, conversationId }).lean<IConversation>();
+      const rows = await Conversation.aggregate<IConversation>([
+        { $match: { user, conversationId } },
+        ...excludeDeletedConversations(),
+        { $limit: 1 },
+        { $unset: '_meiliIndex' },
+      ]);
+      return rows[0] ?? null;
     } catch (error) {
       logger.error('[getConvo] Error getting single conversation', error);
       throw new Error('Error getting single conversation');
@@ -212,6 +265,12 @@ export function createConversationMethods(
     try {
       const Conversation = mongoose.models.Conversation as Model<IConversation>;
       const { getMessages } = getMessageMethods();
+
+      const writeScope = {
+        userId,
+        conversationIds: [conversationId, ...(newConversationId ? [newConversationId] : [])],
+      };
+      await assertResourceWritable(mongoose, writeScope);
 
       if (metadata?.context) {
         logger.debug(`[saveConvo] ${metadata.context}`);
@@ -326,6 +385,10 @@ export function createConversationMethods(
         return null;
       }
 
+      await assertResourceWritable(mongoose, writeScope, async () => {
+        await Conversation.deleteOne({ _id: conversation._id, user: userId });
+      });
+
       if (
         interfaceConfig?.retentionMode === RetentionMode.ALL &&
         typeof isTemporary !== 'boolean' &&
@@ -395,6 +458,7 @@ export function createConversationMethods(
 
       return conversation.toObject();
     } catch (error) {
+      if (error instanceof ResourceDeletedError) throw error;
       logger.error('[saveConvo] Error saving conversation', error);
       if (metadata?.context) {
         logger.info(`[saveConvo] ${metadata.context}`);
@@ -410,6 +474,9 @@ export function createConversationMethods(
     try {
       const Conversation = mongoose.models.Conversation as Model<IConversation>;
       const ChatProject = mongoose.models.ChatProject as Model<IChatProjectDocument>;
+      const scopes = conversationBatchScopes(conversations);
+      await assertConversationBatchWritable(mongoose, scopes);
+      const tenant = resourceBatchTenantFilter();
 
       /**
        * Validate project ownership before persisting (mirrors saveConvo). Bulk
@@ -502,23 +569,35 @@ export function createConversationMethods(
             filter: {
               conversationId: sanitized.conversationId,
               user: sanitized.user,
+              ...tenant,
             },
-            update: sanitized,
+            update: { $set: sanitized },
             upsert: true,
             timestamps: false,
           },
         };
       });
 
-      const result = await tenantSafeBulkWrite(Conversation, bulkOps);
-      await Promise.all(
-        [...affectedProjectStats.values()].map(({ user, projectId }) =>
-          refreshChatProjectStatsForUser(mongoose, user, projectId),
-        ),
-      );
+      let result;
+      try {
+        result = await tenantSafeBulkWrite(Conversation, bulkOps);
+      } finally {
+        try {
+          await assertConversationBatchWritable(mongoose, scopes, async (blocked) => {
+            await Conversation.deleteMany({ $and: [tenant, { $or: blocked }] });
+          });
+        } finally {
+          await Promise.all(
+            [...affectedProjectStats.values()].map(({ user, projectId }) =>
+              refreshChatProjectStatsForUser(mongoose, user, projectId),
+            ),
+          );
+        }
+      }
       return result;
     } catch (error) {
       logger.error('[bulkSaveConvos] Error saving conversations in bulk', error);
+      if (error instanceof ResourceDeletedError) throw error;
       throw new Error('Failed to save conversations in bulk.');
     }
   }
@@ -714,13 +793,29 @@ export function createConversationMethods(
       }
       sortObj._id = sortOrder;
 
-      const convos = await Conversation.find(query)
-        .select(
-          'conversationId endpoint title createdAt updatedAt user model agent_id assistant_id spec iconURL chatProjectId pinned',
-        )
-        .sort(sortObj)
-        .limit(limit + 1)
-        .lean<IConversation[]>();
+      const convos = await Conversation.aggregate<IConversation>([
+        { $match: query },
+        { $sort: sortObj as Record<string, 1 | -1> },
+        ...excludeDeletedConversations(),
+        { $limit: limit + 1 },
+        {
+          $project: {
+            conversationId: 1,
+            endpoint: 1,
+            title: 1,
+            createdAt: 1,
+            updatedAt: 1,
+            user: 1,
+            model: 1,
+            agent_id: 1,
+            assistant_id: 1,
+            spec: 1,
+            iconURL: 1,
+            chatProjectId: 1,
+            pinned: 1,
+          },
+        },
+      ]);
 
       let nextCursor: string | null = null;
       if (convos.length > limit) {
@@ -771,11 +866,17 @@ export function createConversationMethods(
 
       const conversationIds = convoIds.map((convo) => convo.conversationId);
 
-      const results = await Conversation.find({
-        user,
-        conversationId: { $in: conversationIds },
-        ...getVisibleConversationRetentionFilter(),
-      }).lean<IConversation[]>();
+      const results = await Conversation.aggregate<IConversation>([
+        {
+          $match: {
+            user,
+            conversationId: { $in: conversationIds },
+            ...getVisibleConversationRetentionFilter(),
+          },
+        },
+        ...excludeDeletedConversations(),
+        { $unset: '_meiliIndex' },
+      ]);
 
       results.sort(
         (a, b) => new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime(),
@@ -922,6 +1023,9 @@ export function createConversationMethods(
   }
 
   return {
+    prepareConversationExpiryIndex,
+    getExpiredConversations,
+    getConversationsForDeletion,
     getConvoFiles,
     searchConversation,
     deleteNullOrEmptyConversations,

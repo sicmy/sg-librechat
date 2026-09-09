@@ -300,6 +300,7 @@ const useNewConvo = (index = 0) => {
       buildDefault = true,
       keepAddedConvos = false,
       disableParams,
+      restoreFileDraft = false,
     }: {
       template?: Partial<TConversation>;
       preset?: Partial<TPreset>;
@@ -308,12 +309,15 @@ const useNewConvo = (index = 0) => {
       disableFocus?: boolean;
       keepAddedConvos?: boolean;
       disableParams?: boolean;
+      restoreFileDraft?: boolean;
     } = {}) {
       pauseGlobalAudio();
       clearDraft(Constants.NEW_CONVO);
       clearDraft(Constants.PENDING_CONVO);
-      localStorage.removeItem(`${LocalStorageKeys.FILES_DRAFT}${Constants.NEW_CONVO}`);
-      localStorage.removeItem(`${LocalStorageKeys.FILES_DRAFT}${Constants.PENDING_CONVO}`);
+      if (!restoreFileDraft) {
+        localStorage.removeItem(`${LocalStorageKeys.FILES_DRAFT}${Constants.NEW_CONVO}`);
+        localStorage.removeItem(`${LocalStorageKeys.FILES_DRAFT}${Constants.PENDING_CONVO}`);
+      }
       if (!saveBadgesState) {
         resetBadges();
       }
