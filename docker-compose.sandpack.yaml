@@ -1,0 +1,46 @@
+services:
+  api:
+    environment:
+      SANDPACK_BUNDLER_URL: http://127.0.0.1:5081
+    depends_on:
+      sandpack:
+        condition: service_healthy
+
+  sandpack:
+    image: nginx@sha256:1eff5a5f3fcf8431a0abb7eddf5471fec24e5e1905a2581aeacdb07a4479b92b
+    ports:
+      - '127.0.0.1:5081:8080'
+    networks:
+      - sandpack-local
+    read_only: true
+    user: '101:101'
+    volumes:
+      - type: bind
+        source: ./client/node_modules/@codesandbox/sandpack-client/sandpack
+        target: /usr/share/nginx/html
+        read_only: true
+      - type: bind
+        source: ./docker/sandpack/default.conf
+        target: /etc/nginx/conf.d/default.conf
+        read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /var/cache/nginx:rw,nosuid,nodev,size=32m,mode=1777
+      - /var/run:rw,nosuid,nodev,size=1m,mode=1777
+      - /tmp:rw,nosuid,nodev,size=16m,mode=1777
+    mem_limit: 256m
+    cpus: 1
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:8080/']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+networks:
+  sandpack-local:
+    driver: bridge

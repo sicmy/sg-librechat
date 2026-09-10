@@ -12,6 +12,7 @@ modelSpecs:
     - name: sg-default
       label: SG AI Gateway
       default: true
+      artifacts: true
       preset:
         endpoint: SG AI Gateway
         model: default
