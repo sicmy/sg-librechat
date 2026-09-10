@@ -1,0 +1,21 @@
+services:
+  api:
+    environment:
+      LIBRECHAT_CODE_BASEURL: http://sg-codeapi-api:3112/v1
+      CODEAPI_AUTH_PROVIDER: librechat-jwt
+      CODEAPI_JWT_PRIVATE_JWK_JSON: ${CODEAPI_JWT_PRIVATE_JWK_JSON:?Code API JWT private key is required}
+      CODEAPI_JWT_ALGORITHM: EdDSA
+      CODEAPI_JWT_KID: sg-local-codeapi-1
+      CODEAPI_JWT_ISSUER: librechat
+      CODEAPI_JWT_AUDIENCE: codeapi
+      CODEAPI_JWT_TTL_SECONDS: 300
+      CODEAPI_JWT_MINT_CACHE_SECONDS: 30
+      CODEAPI_JWT_SINGLE_TENANT_ID: legacy
+    networks:
+      default: {}
+      code-execution: {}
+
+networks:
+  code-execution:
+    external: true
+    name: sg-code-execution

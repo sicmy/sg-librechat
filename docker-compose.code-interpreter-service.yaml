@@ -1,0 +1,154 @@
+services:
+  api:
+    container_name: !reset null
+    ports: !override
+      - '127.0.0.1:53112:3112'
+    environment:
+      LOCAL_MODE: 'false'
+      CODEAPI_HARDENED_SANDBOX_MODE: 'true'
+      CODEAPI_AUTH_PROVIDER: librechat-jwt
+      CODEAPI_JWT_JWKS_JSON: ${CODEAPI_JWT_JWKS_JSON:?Code API JWT public keys are required}
+      CODEAPI_JWT_ALLOWED_ALGS: EdDSA
+      CODEAPI_JWT_ISSUER: librechat
+      CODEAPI_JWT_AUDIENCE: codeapi
+      CODEAPI_JWT_MAX_TTL_SECONDS: 300
+      CODEAPI_JWT_KEY_CACHE_TTL_SECONDS: 30
+      CODEAPI_TENANT_ISOLATION_STRICT: 'true'
+      CODEAPI_EXECUTION_PROFILE: default
+      CODEAPI_SANDBOX_BACKEND: http
+      CODEAPI_RUNTIME_SESSION_MODE: stateless
+      CODEAPI_BRIDGE_TOKEN: ''
+      CODEAPI_BRIDGE_AUTH_MODE: static
+      CODEAPI_BRIDGE_DYNAMIC_WORKERS: 'false'
+      CODEAPI_INTERNAL_SERVICE_TOKEN: ${CODEAPI_INTERNAL_SERVICE_TOKEN:?Internal service token is required}
+      REDIS_PASSWORD: ${CODEAPI_REDIS_PASSWORD:?Redis password is required}
+    networks:
+      default: {}
+      code-execution:
+        aliases:
+          - sg-codeapi-api
+    mem_limit: 768m
+    cpus: 1
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - bun
+        - -e
+        - fetch('http://127.0.0.1:3112/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 10s
+
+  service-worker:
+    container_name: !reset null
+    environment:
+      LOCAL_MODE: 'false'
+      CODEAPI_HARDENED_SANDBOX_MODE: 'true'
+      CODEAPI_EXECUTION_PROFILE: default
+      CODEAPI_SANDBOX_BACKEND: http
+      CODEAPI_RUNTIME_SESSION_MODE: stateless
+      CODEAPI_BRIDGE_TOKEN: ''
+      CODEAPI_BRIDGE_AUTH_MODE: static
+      CODEAPI_BRIDGE_DYNAMIC_WORKERS: 'false'
+      CODEAPI_INTERNAL_SERVICE_TOKEN: ${CODEAPI_INTERNAL_SERVICE_TOKEN:?Internal service token is required}
+      CODEAPI_EXECUTION_MANIFEST_PRIVATE_KEY: ${CODEAPI_EXECUTION_MANIFEST_PRIVATE_KEY:?Execution manifest private key is required}
+      REDIS_PASSWORD: ${CODEAPI_REDIS_PASSWORD:?Redis password is required}
+      PYTHON_CONCURRENCY: 1
+      OTHER_CONCURRENCY: 2
+    mem_limit: 1g
+    cpus: 1
+    restart: unless-stopped
+
+  egress_gateway:
+    container_name: !reset null
+    ports: !override []
+    environment:
+      CODEAPI_HARDENED_SANDBOX_MODE: 'true'
+      CODEAPI_EGRESS_LEDGER_REQUIRED: 'true'
+      CODEAPI_EGRESS_GRANT_SECRET: ${CODEAPI_EGRESS_GRANT_SECRET:?Egress grant secret is required}
+      CODEAPI_INTERNAL_SERVICE_TOKEN: ${CODEAPI_INTERNAL_SERVICE_TOKEN:?Internal service token is required}
+      REDIS_PASSWORD: ${CODEAPI_REDIS_PASSWORD:?Redis password is required}
+    mem_limit: 384m
+    cpus: 0.5
+    restart: unless-stopped
+    networks:
+      default:
+        ipv4_address: 10.245.77.10
+
+  tool_call_server:
+    container_name: !reset null
+    environment:
+      CODEAPI_INTERNAL_SERVICE_TOKEN: ${CODEAPI_INTERNAL_SERVICE_TOKEN:?Internal service token is required}
+      REDIS_PASSWORD: ${CODEAPI_REDIS_PASSWORD:?Redis password is required}
+    mem_limit: 384m
+    cpus: 0.5
+    restart: unless-stopped
+
+  sandbox-runner:
+    container_name: !reset null
+    ports: !override []
+    volumes: !override []
+    environment:
+      KVM_ENABLED: 'true'
+      CODEAPI_HARDENED_SANDBOX_MODE: 'true'
+      EGRESS_GATEWAY_URL: http://10.245.77.10:3190
+      SANDBOX_FORWARD_TARGET: 10.245.77.10:3190
+      SANDBOX_REQUIRE_EGRESS_MANIFEST: 'true'
+      SANDBOX_EXECUTION_MANIFEST_PUBLIC_KEY: ${CODEAPI_EXECUTION_MANIFEST_PUBLIC_KEY:?Execution manifest public key is required}
+      SANDBOX_MAX_CONCURRENT_JOBS: 2
+      SANDBOX_RUN_TIMEOUT: 60000
+      SANDBOX_RUN_CPU_TIME: 60000
+      SANDBOX_COMPILE_TIMEOUT: 30000
+      SANDBOX_OUTPUT_MAX_SIZE: 65536
+      LAUNCHER_VCPUS: 2
+      LAUNCHER_RAM_MIB: 2048
+      LAUNCHER_LOG_LEVEL: 2
+    mem_limit: 5g
+    cpus: 4
+    restart: unless-stopped
+
+  file_server:
+    container_name: !reset null
+    ports: !override []
+    environment:
+      MINIO_BUCKET: sg-codeapi
+      MINIO_ACCESS_KEY: ${CODEAPI_MINIO_ACCESS_KEY:?MinIO access key is required}
+      MINIO_SECRET_KEY: ${CODEAPI_MINIO_SECRET_KEY:?MinIO secret key is required}
+      CODEAPI_INTERNAL_SERVICE_TOKEN: ${CODEAPI_INTERNAL_SERVICE_TOKEN:?Internal service token is required}
+      REDIS_PASSWORD: ${CODEAPI_REDIS_PASSWORD:?Redis password is required}
+    mem_limit: 512m
+    cpus: 0.5
+    restart: unless-stopped
+
+  redis:
+    container_name: !reset null
+    ports: !override []
+    command:
+      - redis-server
+      - --requirepass
+      - ${CODEAPI_REDIS_PASSWORD:?Redis password is required}
+    mem_limit: 256m
+    cpus: 0.5
+    restart: unless-stopped
+
+  minio:
+    container_name: !reset null
+    ports: !override []
+    environment:
+      MINIO_ROOT_USER: ${CODEAPI_MINIO_ACCESS_KEY:?MinIO access key is required}
+      MINIO_ROOT_PASSWORD: ${CODEAPI_MINIO_SECRET_KEY:?MinIO secret key is required}
+    mem_limit: 1g
+    cpus: 1
+    restart: unless-stopped
+
+networks:
+  default:
+    name: sg-code-interpreter-internal
+    ipam:
+      config:
+        - subnet: 10.245.77.0/24
+  code-execution:
+    external: true
+    name: sg-code-execution
