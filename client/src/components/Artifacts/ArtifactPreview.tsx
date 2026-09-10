@@ -6,7 +6,8 @@ import type {
 } from '@codesandbox/sandpack-react/unstyled';
 import type { SandpackStartupConfig } from '~/utils/artifacts';
 import type { ArtifactFiles } from '~/common';
-import { sharedFiles, buildSandpackOptions } from '~/utils/artifacts';
+import { buildSandboxedHTMLDocument, sharedFiles, buildSandpackOptions } from '~/utils/artifacts';
+import { useLocalize } from '~/hooks';
 
 export const ArtifactPreview = memo(function ({
   files,
@@ -16,6 +17,7 @@ export const ArtifactPreview = memo(function ({
   previewRef,
   currentCode,
   startupConfig,
+  directHTML = false,
 }: {
   files: ArtifactFiles;
   fileKey: string;
@@ -24,7 +26,9 @@ export const ArtifactPreview = memo(function ({
   previewRef: MutableRefObject<SandpackPreviewRef>;
   currentCode?: string;
   startupConfig?: SandpackStartupConfig;
+  directHTML?: boolean;
 }) {
+  const localize = useLocalize();
   const artifactFiles = useMemo(() => {
     if (Object.keys(files).length === 0) {
       return files;
@@ -46,6 +50,19 @@ export const ArtifactPreview = memo(function ({
 
   if (Object.keys(artifactFiles).length === 0) {
     return null;
+  }
+
+  if (directHTML) {
+    const file = artifactFiles[fileKey];
+    const source = typeof file === 'string' ? file : (file?.code ?? '');
+    return (
+      <iframe
+        title={localize('com_ui_preview')}
+        className="h-full w-full border-0 bg-white"
+        sandbox="allow-scripts"
+        srcDoc={buildSandboxedHTMLDocument(source)}
+      />
+    );
   }
 
   return (

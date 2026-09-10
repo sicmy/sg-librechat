@@ -45,6 +45,7 @@ const PARAGRAPHS_REPLY_MARKER = 'E2E_PARAGRAPHS_REPLY';
 const MERMAID_ARTIFACT_REPLY_MARKER = 'E2E_MERMAID_ARTIFACT_REPLY';
 const LARGE_MERMAID_ARTIFACT_REPLY_MARKER = 'E2E_LARGE_MERMAID_ARTIFACT_REPLY';
 const HTML_ARTIFACT_REPLY_MARKER = 'E2E_HTML_ARTIFACT_REPLY';
+const REACT_ARTIFACT_REPLY_MARKER = 'E2E_REACT_ARTIFACT_REPLY';
 const BACKGROUND_DISPATCH_MARKER = 'E2E_BACKGROUND_DISPATCH:';
 const BACKGROUND_COLLECT_MARKER = 'E2E_BACKGROUND_COLLECT:';
 const TOOL_APPROVAL_MARKER = 'E2E_TOOL_APPROVAL:';
@@ -410,7 +411,23 @@ function replyResponses(text) {
       responses: [
         [
           ':::artifact{identifier="e2e-html" type="text/html" title="E2E HTML Artifact"}',
-          '<h1>HTML sandbox fixture</h1>',
+          '<main><h1>HTML sandbox fixture</h1><button onclick="this.textContent=`HTML count: ${Number(this.textContent.split(\': \')[1])+1}`">HTML count: 0</button></main>',
+          ':::',
+        ].join('\n'),
+      ],
+    };
+  }
+
+  if (text.includes(REACT_ARTIFACT_REPLY_MARKER)) {
+    return {
+      responses: [
+        [
+          ':::artifact{identifier="e2e-react" type="application/vnd.react" title="E2E React Artifact"}',
+          'import { useState } from "react";',
+          'export default function App() {',
+          '  const [count, setCount] = useState(0);',
+          '  return <main><h1>React sandbox fixture</h1><button onClick={() => setCount((value) => value + 1)}>React count: {count}</button></main>;',
+          '}',
           ':::',
         ].join('\n'),
       ],

@@ -141,8 +141,8 @@ const dependenciesMap: Record<
   'application/vnd.mermaid': mermaidDependencies,
   'application/vnd.react': standardDependencies,
   'application/vnd.ant.react': standardDependencies,
-  'text/html': standardDependencies,
-  'application/vnd.code-html': standardDependencies,
+  'text/html': {},
+  'application/vnd.code-html': {},
   /* CODE renders in the static markdown template; no React or other
    * runtime deps. Empty map skips the sandpack `package.json` install
    * step entirely (same as MARKDOWN/PLAIN_TEXT). */
@@ -184,18 +184,45 @@ export type SandpackStartupConfig = Pick<
   'bundlerURL' | 'staticBundlerURL'
 >;
 
+/** Select the template-specific self-hosted URL while retaining the upstream
+ * public defaults when that particular runtime is not configured. */
 export function buildSandpackOptions(
   template: SandpackProviderProps['template'],
   startupConfig?: SandpackStartupConfig,
 ): SandpackProviderProps['options'] {
-  if (!startupConfig) {
+  const bundlerURL =
+    template === 'static' ? startupConfig?.staticBundlerURL : startupConfig?.bundlerURL;
+  if (!bundlerURL) {
     return sharedOptions;
   }
 
   return {
-    ...sharedOptions,
-    bundlerURL: template === 'static' ? startupConfig.staticBundlerURL : startupConfig.bundlerURL,
+    bundlerURL,
+    externalResources: [],
   };
+}
+
+const HTML_PREVIEW_CSP = [
+  "default-src 'none'",
+  "script-src 'unsafe-inline'",
+  "style-src 'unsafe-inline'",
+  'img-src data: blob:',
+  'media-src data: blob:',
+  'font-src data:',
+  "connect-src 'none'",
+  "form-action 'none'",
+  "base-uri 'none'",
+  "object-src 'none'",
+].join('; ');
+
+/**
+ * Wrap generated HTML in an opaque-origin iframe document. HTML artifacts do
+ * not need Sandpack's package resolver, so this keeps their inline behaviour
+ * while blocking network, form, object and parent-document access.
+ */
+export function buildSandboxedHTMLDocument(source: string): string {
+  const policy = `<meta http-equiv="Content-Security-Policy" content="${HTML_PREVIEW_CSP}">`;
+  return `<!doctype html>${policy}<meta name="viewport" content="width=device-width,initial-scale=1">${source}`;
 }
 
 /**

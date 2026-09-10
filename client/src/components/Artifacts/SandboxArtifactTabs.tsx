@@ -43,6 +43,7 @@ export default function SandboxArtifactTabs({
   }, [artifact.id, setCurrentCode]);
 
   const { files, fileKey, template, sharedProps } = useArtifactProps({ artifact });
+  const directHTML = artifact.type === 'text/html' || artifact.type === 'application/vnd.code-html';
 
   return (
     <div className="flex h-full w-full flex-col">
@@ -72,6 +73,7 @@ export default function SandboxArtifactTabs({
           sharedProps={sharedProps}
           currentCode={hasCurrentArtifactCode ? currentCode : undefined}
           startupConfig={resolvedStartupConfig}
+          directHTML={directHTML}
         />
       </Tabs.Content>
     </div>

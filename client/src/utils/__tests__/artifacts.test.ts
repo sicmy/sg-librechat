@@ -2,8 +2,10 @@ import { FileSources } from 'librechat-data-provider';
 import type { ToolArtifactType } from '../artifacts';
 import {
   buildSandpackOptions,
+  buildSandboxedHTMLDocument,
   detectArtifactTypeFromFile,
   fileToArtifact,
+  getDependencies,
   isCodeOnlyArtifact,
   isPreviewOnlyArtifact,
   languageForFilename,
@@ -29,7 +31,7 @@ describe('buildSandpackOptions', () => {
     >[1];
     const options = buildSandpackOptions('static', config);
     expect(options?.bundlerURL).toBe('https://static.example.com');
-    expect(options?.externalResources).toEqual([TAILWIND_CDN]);
+    expect(options?.externalResources).toEqual([]);
   });
 
   it('uses bundlerURL when template is react-ts and config is provided', () => {
@@ -38,12 +40,45 @@ describe('buildSandpackOptions', () => {
     >[1];
     const options = buildSandpackOptions('react-ts', config);
     expect(options?.bundlerURL).toBe('https://bundler.example.com');
-    expect(options?.externalResources).toEqual([TAILWIND_CDN]);
+    expect(options?.externalResources).toEqual([]);
+  });
+
+  it('keeps the public defaults when the relevant self-hosted URL is absent', () => {
+    expect(buildSandpackOptions('static', { bundlerURL: 'https://react.example.com' })).toEqual(
+      expect.objectContaining({ externalResources: [TAILWIND_CDN] }),
+    );
+    expect(
+      buildSandpackOptions('react-ts', { staticBundlerURL: 'https://static.example.com' }),
+    ).toEqual(expect.objectContaining({ externalResources: [TAILWIND_CDN] }));
   });
 
   it('returns base options without bundlerURL when no config is provided', () => {
     const options = buildSandpackOptions('react-ts');
     expect(options?.bundlerURL).toBeUndefined();
+  });
+});
+
+describe('buildSandboxedHTMLDocument', () => {
+  it('wraps an HTML fragment and blocks external network access', () => {
+    const document = buildSandboxedHTMLDocument('<h1>fixture</h1><script>window.ok=true</script>');
+    expect(document).toContain('<h1>fixture</h1>');
+    expect(document).toContain("default-src 'none'");
+    expect(document).toContain("script-src 'unsafe-inline'");
+    expect(document).toContain("connect-src 'none'");
+  });
+
+  it('places the policy before a complete supplied document', () => {
+    const document = buildSandboxedHTMLDocument(
+      '<html><head><title>x</title></head><body>x</body></html>',
+    );
+    expect(document.indexOf('Content-Security-Policy')).toBeLessThan(document.indexOf('<html>'));
+  });
+});
+
+describe('getDependencies', () => {
+  it('does not install React packages for static HTML artifacts', () => {
+    expect(getDependencies('text/html')).toEqual({});
+    expect(getDependencies('application/vnd.code-html')).toEqual({});
   });
 });
 

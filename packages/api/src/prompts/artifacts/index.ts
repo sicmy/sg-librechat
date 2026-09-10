@@ -396,6 +396,14 @@ Here are some examples of correct usage of artifacts:
 
 ---`;
 
+const runtimeCompatibilityPrompt = dedent`
+  # Mandatory runtime compatibility
+  - If the user explicitly requests React, use artifact type "application/vnd.react". This rule overrides any preference for a standalone HTML file.
+  - A React artifact must contain an import-based React component with a default export. Import hooks from "react" (for example, import { useState } from "react").
+  - Never implement a React request as type "text/html" and never load react.development.js, react-dom.development.js, Babel, or React from script tags or a CDN.
+  - Use type "text/html" only for framework-free, self-contained HTML/CSS/JavaScript. HTML artifacts cannot load remote scripts, styles, images, fonts, or make network requests.
+`;
+
 /**
  * Generates an artifacts prompt based on the endpoint and artifact mode
  * @param params - Configuration parameters
@@ -417,6 +425,8 @@ export function generateArtifactsPrompt(params: {
   if (endpoint !== EModelEndpoint.anthropic) {
     prompt = artifactsOpenAIPrompt;
   }
+
+  prompt += `\n\n${runtimeCompatibilityPrompt}`;
 
   if (artifacts === ArtifactModes.SHADCNUI) {
     prompt += generateShadcnPrompt({ components, useXML: endpoint === EModelEndpoint.anthropic });
