@@ -1,0 +1,15 @@
+diff --git a/service/src/payload.ts b/service/src/payload.ts
+--- a/service/src/payload.ts
++++ b/service/src/payload.ts
+@@ -3,4 +3,4 @@
+ import type * as t from './types';
+-import { planLimits, languageConfig, resolveLanguage } from './config';
++import { env, planLimits, languageConfig, resolveLanguage } from './config';
+-
++
+ export const templateCode = fs.readFileSync(path.join(__dirname, 'matplotlib.py'), 'utf8');
+@@ -36,3 +36,4 @@ export function createPayload({
+     run_memory_limit,
+     language: config.language,
++    ...(env.EGRESS_GATEWAY_URL ? { tool_call_socket: true } : {}),
+     version: config.version,

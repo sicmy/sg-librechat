@@ -13,6 +13,7 @@ modelSpecs:
       label: SG AI Gateway
       default: true
       artifacts: true
+      executeCode: true
       preset:
         endpoint: SG AI Gateway
         model: default
