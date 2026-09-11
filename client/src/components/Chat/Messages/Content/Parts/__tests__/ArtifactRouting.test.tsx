@@ -43,6 +43,13 @@ jest.mock('~/components/Chat/Messages/Content/Image', () => ({
   default: ({ altText }: { altText?: string }) => <img alt={altText ?? ''} data-testid="image" />,
 }));
 
+jest.mock('../ToolFilePreviewCard', () => ({
+  __esModule: true,
+  default: ({ attachment }: { attachment: TAttachment }) => (
+    <div data-testid="file-preview-card">{attachment.filename}</div>
+  ),
+}));
+
 jest.mock('~/components/Messages/Content/Mermaid/Mermaid', () => ({
   __esModule: true,
   default: ({
@@ -691,6 +698,17 @@ describe('ToolArtifactCard click behaviour', () => {
 });
 
 describe('AttachmentGroup routing', () => {
+  it('routes generated PDFs through the shared file preview card', () => {
+    const pdf = baseAttachment({
+      file_id: 'generated-pdf',
+      filename: 'generated.pdf',
+      type: 'application/pdf',
+    } as unknown as Partial<TAttachment>);
+    renderWith(<AttachmentGroup attachments={[pdf]} />);
+    expect(screen.getByTestId('file-preview-card')).toHaveTextContent('generated.pdf');
+    expect(screen.queryByTestId('file-container')).not.toBeInTheDocument();
+  });
+
   it('filters internal sandbox `.dirkeep` placeholders out of every bucket', () => {
     // The bash executor's empty-folder marker (`_.dirkeep-<hash>`,
     // `bytes: 0`) is implementation detail; users shouldn't see it as

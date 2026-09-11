@@ -92,7 +92,7 @@
     "e2e:phase6": "npm run e2e:prepare && playwright test --config=e2e/playwright.config.phase6.ts",
     "e2e:phase7": "npm run e2e:prepare && playwright test --config=e2e/playwright.config.phase7.ts",
     "e2e:phase8": "npm run e2e:prepare && playwright test --config=e2e/playwright.config.phase8.ts",
-    "e2e:sandpack": "npm run e2e:prepare && playwright test --config=e2e/playwright.config.sandpack.ts",
+    "e2e:sandpack": "npm run e2e:prepare && cross-env E2E_BASE_URL=http://127.0.0.1:53335 E2E_HOST=127.0.0.1 E2E_PORT=53335 playwright test --config=e2e/playwright.config.sandpack.ts",
     "e2e:delivery": "npm run e2e:prepare && playwright test --config=e2e/playwright.config.delivery.ts",
     "e2e:deletion": "npm run e2e:prepare && playwright test --config=e2e/playwright.config.deletion.ts",
     "e2e:debug": "npm run e2e:prepare && cross-env PWDEBUG=1 playwright test --config=e2e/playwright.config.local.ts",
