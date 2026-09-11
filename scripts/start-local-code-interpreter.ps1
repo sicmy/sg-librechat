@@ -1,4 +1,6 @@
-param()
+param(
+  [switch]$BuildLibreChat
+)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -66,9 +68,21 @@ if ($LASTEXITCODE -eq 0) {
 } else {
   $payloadPath = Join-Path $sourcePath 'service\src\payload.ts'
   $payloadSource = [IO.File]::ReadAllText($payloadPath)
+  $sandboxDockerfilePath = Join-Path $sourcePath 'api\Dockerfile'
+  $sandboxDockerfile = [IO.File]::ReadAllText($sandboxDockerfilePath)
+  $sandboxConfigPath = Join-Path $sourcePath 'api\config\sandbox.cfg'
+  $sandboxConfig = [IO.File]::ReadAllText($sandboxConfigPath)
   $patchedImport = "import { env, planLimits, languageConfig, resolveLanguage } from './config';"
   $patchedCapability = '...(env.EGRESS_GATEWAY_URL ? { tool_call_socket: true } : {}),'
-  if (-not $payloadSource.Contains($patchedImport) -or -not $payloadSource.Contains($patchedCapability)) {
+  if (
+    -not $payloadSource.Contains($patchedImport) -or
+    -not $payloadSource.Contains($patchedCapability) -or
+    -not $sandboxDockerfile.Contains('fontconfig') -or
+    -not $sandboxDockerfile.Contains('fonts-noto-cjk') -or
+    -not $sandboxDockerfile.Contains('fonts-nanum') -or
+    -not $sandboxConfig.Contains('FONTCONFIG_FILE=/etc/fonts/fonts.conf') -or
+    -not $sandboxConfig.Contains('src: "/etc/fonts"')
+  ) {
     throw 'Code Interpreter compatibility patch does not match the pinned source.'
   }
 }
@@ -169,6 +183,9 @@ $libreChatCompose = @(
   '-f', (Join-Path $repoRoot 'docker-compose.sandpack.yaml'),
   '-f', $libreChatOverride
 )
+if ($BuildLibreChat) {
+  Invoke-Checked 'docker' ($libreChatCompose + @('build', 'api'))
+}
 Invoke-Checked 'docker' ($libreChatCompose + @('up', '-d', '--no-deps', 'api'))
 
 $libreChatDeadline = (Get-Date).AddMinutes(2)

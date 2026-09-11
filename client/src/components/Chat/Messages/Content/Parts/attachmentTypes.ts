@@ -155,6 +155,13 @@ export const isImageAttachment = (attachment: TAttachment): boolean => {
   );
 };
 
+/** Generated PDF outputs reuse the existing owned-file preview dialog. */
+export const isPdfAttachment = (attachment: TAttachment): boolean => {
+  const file = attachment as TFile & TAttachmentMetadata;
+  const mime = file.type?.split(';')[0].trim().toLowerCase();
+  return mime === 'application/pdf' || leafOf(file.filename).toLowerCase().endsWith('.pdf');
+};
+
 /**
  * An attachment renders inline as text when the backend has populated a
  * non-empty `text` field on the underlying file record. Empty strings are

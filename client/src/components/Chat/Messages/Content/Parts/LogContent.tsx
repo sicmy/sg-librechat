@@ -1,5 +1,5 @@
-import { isAfter } from 'date-fns';
 import React, { useMemo } from 'react';
+import { isAfter } from 'date-fns';
 import { imageExtRegex } from 'librechat-data-provider';
 import type { TFile, TAttachment, TAttachmentMetadata } from 'librechat-data-provider';
 import type { Artifact } from '~/common';
@@ -9,6 +9,7 @@ import {
   byEntrySalience,
   displayFilename,
   isInternalSandboxArtifact,
+  isPdfAttachment,
   isTextAttachment,
   renderAttachmentKey,
 } from './attachmentTypes';
@@ -16,6 +17,7 @@ import { fileToArtifact, TOOL_ARTIFACT_TYPES } from '~/utils/artifacts';
 import Image from '~/components/Chat/Messages/Content/Image';
 import ToolMermaidArtifact from './ToolMermaidArtifact';
 import ToolArtifactCard from './ToolArtifactCard';
+import ToolFilePreviewCard from './ToolFilePreviewCard';
 import { useLocalize } from '~/hooks';
 import LogLink from './LogLink';
 
@@ -52,12 +54,14 @@ const LogContent: React.FC<LogContentProps> = ({ output = '', renderImages, atta
 
   const {
     imageAttachments,
+    pdfAttachments,
     textAttachments,
     panelAttachments,
     mermaidAttachments,
     nonInlineAttachments,
   } = useMemo(() => {
     const imageAtts: ImageAttachment[] = [];
+    const pdfAtts: Array<TFile & TAttachmentMetadata> = [];
     const textAtts: Array<TFile & TAttachmentMetadata> = [];
     const panelAtts: PanelEntry[] = [];
     const mermaidAtts: MermaidEntry[] = [];
@@ -92,6 +96,10 @@ const LogContent: React.FC<LogContentProps> = ({ output = '', renderImages, atta
         otherAtts.push(attachment);
         return;
       }
+      if (isPdfAttachment(attachment)) {
+        pdfAtts.push(fileData);
+        return;
+      }
       const artType = artifactTypeForAttachment(attachment);
       if (artType === TOOL_ARTIFACT_TYPES.MERMAID) {
         if (fileData.text) {
@@ -123,6 +131,7 @@ const LogContent: React.FC<LogContentProps> = ({ output = '', renderImages, atta
     // lands on the real artifact first. Stable sort preserves the
     // arrival order among non-empty entries.
     imageAtts.sort(bySalience);
+    pdfAtts.sort(bySalience);
     textAtts.sort(bySalience);
     panelAtts.sort(byEntrySalience);
     mermaidAtts.sort(byEntrySalience);
@@ -130,6 +139,7 @@ const LogContent: React.FC<LogContentProps> = ({ output = '', renderImages, atta
 
     return {
       imageAttachments: renderImages === true ? imageAtts : null,
+      pdfAttachments: pdfAtts,
       textAttachments: textAtts,
       panelAttachments: panelAtts,
       mermaidAttachments: mermaidAtts,
@@ -169,6 +179,16 @@ const LogContent: React.FC<LogContentProps> = ({ output = '', renderImages, atta
   return (
     <>
       {processedContent && <div>{processedContent}</div>}
+      {pdfAttachments.length > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          {pdfAttachments.map((attachment, index) => (
+            <ToolFilePreviewCard
+              key={renderAttachmentKey('pdf', attachment, index)}
+              attachment={attachment}
+            />
+          ))}
+        </div>
+      )}
       {nonInlineAttachments.length > 0 && (
         <div>
           <p>{localize('com_generated_files')}</p>

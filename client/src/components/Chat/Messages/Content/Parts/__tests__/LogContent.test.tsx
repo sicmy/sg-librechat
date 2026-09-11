@@ -41,6 +41,13 @@ jest.mock('~/components/Chat/Messages/Content/Image', () => ({
   default: ({ altText }: { altText?: string }) => <img alt={altText ?? ''} data-testid="image" />,
 }));
 
+jest.mock('../ToolFilePreviewCard', () => ({
+  __esModule: true,
+  default: ({ attachment }: { attachment: TAttachment }) => (
+    <div data-testid="file-preview-card">{attachment.filename}</div>
+  ),
+}));
+
 jest.mock('~/components/Messages/Content/Mermaid/Mermaid', () => ({
   __esModule: true,
   default: ({ children }: { children: string }) => (
@@ -125,6 +132,17 @@ describe('LogContent attachment routing', () => {
     });
     renderWith(<LogContent output="" attachments={[zip]} />);
     expect(screen.getByTestId('log-link')).toHaveAttribute('data-filename', 'archive.zip');
+  });
+
+  it('routes generated PDFs through the existing file preview dialog card', () => {
+    const pdf = baseAttachment({
+      file_id: 'pdf',
+      filename: 'generated.pdf',
+      type: 'application/pdf',
+    } as unknown as Partial<TAttachment>);
+    renderWith(<LogContent output="" attachments={[pdf]} />);
+    expect(screen.getByTestId('file-preview-card')).toHaveTextContent('generated.pdf');
+    expect(screen.queryByTestId('log-link')).not.toBeInTheDocument();
   });
 
   it('renders a panel card for a pptx with backend-rendered HTML in text', () => {
