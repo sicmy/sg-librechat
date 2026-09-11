@@ -34,7 +34,7 @@ export default defineConfig({
     {
       ...gatewayServer,
       command:
-        'uv run uvicorn task4e_app:app --app-dir tests/e2e --host 127.0.0.1 --port 4000 --no-access-log',
+        'uv run uvicorn task4e_app:app --app-dir tests/e2e --host 127.0.0.1 --port 4040 --no-access-log',
       cwd: gatewayServiceRoot,
       env: {
         ...gatewayServer?.env,

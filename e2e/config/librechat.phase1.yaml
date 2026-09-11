@@ -9,7 +9,7 @@ endpoints:
   custom:
     - name: SG AI Gateway
       apiKey: '${SG_GATEWAY_API_KEY}'
-      baseURL: http://127.0.0.1:4000/v1
+      baseURL: http://127.0.0.1:4040/v1
       models:
         default:
           - default

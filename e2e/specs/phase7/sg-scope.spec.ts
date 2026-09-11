@@ -63,7 +63,7 @@ test('binds drafts once, isolates conversations and users, and keeps file instru
   );
   await expect(messagesView(page).getByText('Direct answer: DIRECT_ALPHA.').last()).toBeVisible();
 
-  const other = await apiRequest.newContext({ baseURL: 'http://127.0.0.1:3334' });
+  const other = await apiRequest.newContext({ baseURL: 'http://127.0.0.1:53334' });
   try {
     const email = `scope-other-${Date.now()}@example.com`;
     const password = 'Scope-test-password-123!';

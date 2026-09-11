@@ -20,7 +20,7 @@ type StubState = {
 };
 
 const STUB_URL = 'http://127.0.0.1:4010';
-const GATEWAY_URL = 'http://127.0.0.1:4000';
+const GATEWAY_URL = 'http://127.0.0.1:4040';
 const DETERMINISTIC_ANSWER = 'Phase 1 deterministic answer.';
 const LOOPBACK_NO_PROXY = '127.0.0.1,localhost,::1';
 

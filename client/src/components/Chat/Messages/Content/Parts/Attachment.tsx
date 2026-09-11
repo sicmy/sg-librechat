@@ -10,6 +10,7 @@ import {
   displayFilename,
   isImageAttachment,
   isInternalSandboxArtifact,
+  isPdfAttachment,
   isTextAttachment,
   renderAttachmentKey,
 } from './attachmentTypes';
@@ -19,6 +20,7 @@ import { fileToArtifact, TOOL_ARTIFACT_TYPES } from '~/utils/artifacts';
 import Image from '~/components/Chat/Messages/Content/Image';
 import ToolMermaidArtifact from './ToolMermaidArtifact';
 import ToolArtifactCard from './ToolArtifactCard';
+import ToolFilePreviewCard from './ToolFilePreviewCard';
 import { useAttachmentLink } from './LogLink';
 import { useLocalize, useAttachmentPreviewSync, useExpandCollapse } from '~/hooks';
 import { cn, getFileType } from '~/utils';
@@ -509,6 +511,9 @@ export default function Attachment({ attachment }: { attachment?: TAttachment })
   if (isImageAttachment(attachment)) {
     return <ImageAttachment attachment={attachment} />;
   }
+  if (isPdfAttachment(attachment)) {
+    return <ToolFilePreviewCard attachment={attachment} />;
+  }
   // Single classification call. The result is threaded into
   // `PanelArtifact` -> `fileToArtifact` so the panel path doesn't
   // re-run `detectArtifactTypeFromFile` a second time.
@@ -535,6 +540,7 @@ export function AttachmentGroup({ attachments }: { attachments?: TAttachment[] }
 
   const fileAttachments: TAttachment[] = [];
   const imageAttachments: TAttachment[] = [];
+  const pdfAttachments: TAttachment[] = [];
   const textAttachments: TAttachment[] = [];
   /* Pending-preview chips share this row with their future selves —
    * `type` is null while pending so the renderer falls back to
@@ -552,6 +558,10 @@ export function AttachmentGroup({ attachments }: { attachments?: TAttachment[] }
     }
     if (isImageAttachment(attachment)) {
       imageAttachments.push(attachment);
+      return;
+    }
+    if (isPdfAttachment(attachment)) {
+      pdfAttachments.push(attachment);
       return;
     }
     if ((attachment as Partial<TFile>).status === 'pending') {
@@ -588,6 +598,7 @@ export function AttachmentGroup({ attachments }: { attachments?: TAttachment[] }
   resolvedPanel.sort(byEntrySalience);
   mermaidArtifacts.sort(bySalience);
   imageAttachments.sort(bySalience);
+  pdfAttachments.sort(bySalience);
 
   const downloadableFileAttachments = fileAttachments.filter((attachment) =>
     Boolean(attachment.filepath),
@@ -605,6 +616,16 @@ export function AttachmentGroup({ attachments }: { attachments?: TAttachment[] }
 
   return (
     <>
+      {pdfAttachments.length > 0 && (
+        <div className="my-2 flex flex-wrap items-center gap-2.5">
+          {pdfAttachments.map((attachment, index) => (
+            <ToolFilePreviewCard
+              attachment={attachment}
+              key={renderAttachmentKey('pdf', attachment, index)}
+            />
+          ))}
+        </div>
+      )}
       {groupedFileAttachments.length > 0 && (
         <FileAttachmentGroup attachments={groupedFileAttachments} />
       )}
