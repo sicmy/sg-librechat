@@ -5,6 +5,7 @@ import {
   displayFilename,
   isImageAttachment,
   isInternalSandboxArtifact,
+  isPdfAttachment,
   isTextAttachment,
 } from '../attachmentTypes';
 import { TOOL_ARTIFACT_TYPES } from '~/utils/artifacts';
@@ -67,6 +68,34 @@ describe('isImageAttachment', () => {
       filepath: null as unknown as string,
     } as Partial<TAttachment>);
     expect(isImageAttachment(attachment)).toBe(false);
+  });
+});
+
+describe('isPdfAttachment', () => {
+  it('matches the canonical PDF MIME type', () => {
+    expect(
+      isPdfAttachment(
+        baseAttachment({
+          filename: 'report.bin',
+          type: 'application/pdf',
+        } as unknown as Partial<TAttachment>),
+      ),
+    ).toBe(true);
+  });
+
+  it('falls back to a case-insensitive PDF extension', () => {
+    expect(
+      isPdfAttachment(
+        baseAttachment({
+          filename: 'reports/summary.PDF',
+          type: undefined,
+        } as unknown as Partial<TAttachment>),
+      ),
+    ).toBe(true);
+  });
+
+  it('rejects unrelated binary files', () => {
+    expect(isPdfAttachment(baseAttachment({ filename: 'archive.zip' }))).toBe(false);
   });
 });
 

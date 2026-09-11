@@ -123,6 +123,76 @@ async function execute(testCase) {
   };
 }
 
+async function verifyKoreanPdf() {
+  const filename = 'korean-pdf-result.pdf';
+  const code = [
+    'import subprocess',
+    'from pathlib import Path',
+    'from reportlab.pdfbase import pdfmetrics',
+    'from reportlab.pdfbase.ttfonts import TTFont',
+    'from reportlab.pdfgen import canvas',
+    'from reportlab.lib.pagesizes import A4',
+    'from PyPDF2 import PdfReader',
+    'match = subprocess.run(["fc-match", "-f", "%{file}", "NanumGothic"], capture_output=True, text=True, check=True)',
+    'font_path = match.stdout.strip()',
+    'assert not match.stderr.strip()',
+    'assert font_path and Path(font_path).is_file() and font_path.lower().endswith(".ttf")',
+    'pdfmetrics.registerFont(TTFont("SGNanum", font_path))',
+    `output = Path("/mnt/data/${filename}")`,
+    'document = canvas.Canvas(str(output), pagesize=A4)',
+    'document.setFont("SGNanum", 18)',
+    'document.drawString(72, 770, "SG AI 한글 PDF 생성 테스트")',
+    'document.setFont("SGNanum", 12)',
+    'document.drawString(72, 735, "한글 글꼴 포함과 텍스트 추출이 정상입니다.")',
+    'document.save()',
+    'reader = PdfReader(str(output))',
+    'extracted = "".join(page.extract_text() or "" for page in reader.pages)',
+    'assert "SG AI 한글 PDF 생성 테스트" in extracted',
+    'font_resources = reader.pages[0]["/Resources"]["/Font"]',
+    'fonts = [reference.get_object() for reference in font_resources.values()]',
+    'descriptors = []',
+    'for font in fonts:',
+    '    descendants = [reference.get_object() for reference in font.get("/DescendantFonts", [])]',
+    '    for candidate in [font, *descendants]:',
+    '        descriptor_reference = candidate.get("/FontDescriptor")',
+    '        if descriptor_reference:',
+    '            descriptors.append(descriptor_reference.get_object())',
+    'embedded = any(any(key in descriptor for key in ["/FontFile", "/FontFile2", "/FontFile3"]) for descriptor in descriptors)',
+    'assert embedded',
+    'print("KOREAN_PDF_OK")',
+  ].join('\n');
+  const response = await fetch(`${baseURL}/exec`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ lang: 'py', code, args: [] }),
+  });
+  const result = await response.json();
+  if (!response.ok || !result.stdout?.includes('KOREAN_PDF_OK')) {
+    throw new Error(`Korean PDF generation failed with HTTP ${response.status}`);
+  }
+  const file = result.files?.find((item) => item.name === filename);
+  if (!file || !result.session_id) {
+    throw new Error('Korean PDF generation did not return the expected file');
+  }
+  const query = new URLSearchParams({ kind: 'user', id: userId });
+  const download = await fetch(
+    `${baseURL}/download/${encodeURIComponent(result.session_id)}/${encodeURIComponent(file.id)}?${query}`,
+    { headers },
+  );
+  const content = Buffer.from(await download.arrayBuffer());
+  if (!download.ok || content.subarray(0, 4).toString() !== '%PDF') {
+    throw new Error('Korean PDF download verification failed');
+  }
+  return {
+    executionStatus: response.status,
+    fontMatched: true,
+    textExtracted: true,
+    fontEmbedded: true,
+    downloadStatus: download.status,
+    pdfMatched: true,
+  };
+}
+
 const unauthorized = await fetch(`${baseURL}/exec`, {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
@@ -136,6 +206,7 @@ const results = [];
 for (const testCase of cases) {
   results.push(await execute(testCase));
 }
+const koreanPdf = await verifyKoreanPdf();
 
 const errorResponse = await fetch(`${baseURL}/exec`, {
   method: 'POST',
@@ -174,6 +245,7 @@ console.log(
   JSON.stringify({
     unauthorizedStatus: unauthorized.status,
     runtimes: results,
+    koreanPdf,
     executionErrorCaptured: true,
     networkBlocked: true,
   }),

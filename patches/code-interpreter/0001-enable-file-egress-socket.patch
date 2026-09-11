@@ -1,3 +1,44 @@
+diff --git a/api/Dockerfile b/api/Dockerfile
+--- a/api/Dockerfile
++++ b/api/Dockerfile
+@@ -85,7 +85,10 @@ RUN apt-get update && \
+     jq \
+     poppler-utils \
++    fontconfig \
+     fonts-dejavu \
+     fonts-liberation \
++    fonts-noto-cjk \
++    fonts-nanum \
+     libnl-route-3-200 \
+     libprotobuf32 \
+     libffi8 \
+diff --git a/api/config/sandbox.cfg b/api/config/sandbox.cfg
+--- a/api/config/sandbox.cfg
++++ b/api/config/sandbox.cfg
+@@ -20,4 +20,5 @@ envar: "LANG=en_US.UTF-8"
+ envar: "PYTHONDONTWRITEBYTECODE=1"
+ envar: "PYTHONUNBUFFERED=1"
+ envar: "MPLBACKEND=Agg"
++envar: "FONTCONFIG_FILE=/etc/fonts/fonts.conf"
+ envar: "PATH=/usr/local/bin:/usr/bin:/bin"
+@@ -47,10 +48,16 @@ mount {
+ mount {
+     src: "/etc/ld.so.cache"
+     dst: "/etc/ld.so.cache"
+     is_bind: true
+     rw: false
+     mandatory: false
+ }
+-
++mount {
++    src: "/etc/fonts"
++    dst: "/etc/fonts"
++    is_bind: true
++    rw: false
++}
++
+ # Static /etc/hosts so "localhost" resolves for tool-call-server connections.
+ # Uses inline content instead of bind-mounting the host's /etc/hosts, which
 diff --git a/service/src/payload.ts b/service/src/payload.ts
 --- a/service/src/payload.ts
 +++ b/service/src/payload.ts
